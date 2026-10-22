@@ -704,9 +704,18 @@ class UserInfoDatabase {
     try {
       await testDb.execute('PRAGMA cache_size = -16384');
       await testDb.execute('PRAGMA mmap_size = 67108864');
-      final result = await testDb.rawQuery('PRAGMA quick_check');
-      if (result.isEmpty || result.first.values.first != 'ok') {
-        throw const FormatException('SQLite quick_check failed');
+      // A failed check returns specific error rows. Never discard them:
+      // they distinguish a damaged DB page from a freelist or index fault.
+      // Limit results to 10 structural messages; no user record values are
+      // queried or included in the error.
+      final result = await testDb.rawQuery('PRAGMA quick_check(10)');
+      final messages = result.map((r) => r.values.first?.toString() ?? '')
+          .where((message) => message.isNotEmpty)
+          .take(10)
+          .toList();
+      if (messages.length != 1 || messages.single != 'ok') {
+        throw FormatException('SQLite quick_check: '
+            '${messages.isEmpty ? 'no result returned' : messages.join(' | ')}');
       }
       final tables = await testDb.rawQuery(
           "SELECT name FROM sqlite_master WHERE type = 'table' "
