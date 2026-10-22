@@ -1,77 +1,175 @@
 import 'dart:convert';
 
-/// RFC-4180-style streaming parser: quoted commas, escaped quotes and multiline
-/// cells are supported, including when a UTF-8 sequence crosses a chunk boundary.
-/// Does not load the entire CSV in memory.
+/// One logical CSV record. A malformed record has [error] instead of fields.
+/// Only line/record numbers and safe reason codes should be logged.
+class CsvParsedRecord {
+  const CsvParsedRecord({
+    required this.recordNumber,
+    required this.physicalLine,
+    this.fields,
+    this.error,
+  });
+
+  final int recordNumber;
+  final int physicalLine;
+  final List<String>? fields;
+  final String? error;
+
+  bool get isValid => error == null && fields != null;
+}
+
+/// Streaming RFC-4180-compatible CSV reader supporting quoted commas, escaped
+/// quotes, multiline fields, BOM and malformed-row recovery.
+///
+/// A corrupt CSV can be ambiguous (for example a missing terminating quote).
+/// For an oversized record we resynchronize at the next physical newline.
+/// This intentionally drops the corrupt record, without manufacturing data.
 class CsvStreamParser {
-  const CsvStreamParser();
+  const CsvStreamParser({this.maxRecordCharacters = 1024 * 1024});
+
+  final int maxRecordCharacters;
 
   Stream<List<String>> parse(Stream<List<int>> bytes) async* {
+    await for (final row in parseWithErrors(bytes)) {
+      if (row.isValid) yield row.fields!;
+    }
+  }
+
+  Stream<CsvParsedRecord> parseWithErrors(Stream<List<int>> bytes) async* {
     var cells = <String>[];
     var cell = StringBuffer();
     var inQuotes = false;
-    var pendingQuote = false;
-    var fieldStarted = false;
-    var skipLf = false;
-    var firstCharacter = true;
+    var quotePending = false;
+    var quoteClosed = false;
+    var started = false;
+    var discard = false;
+    String? error;
+    var recordChars = 0;
+    var recordNumber = 0;
+    var physicalLine = 1;
+    var startLine = 1;
+    var firstChar = true;
+    var afterCr = false;
 
-    await for (final chunk in bytes.transform(utf8.decoder)) {
-      for (final originalChar in chunk.split('')) {
-        var char = originalChar;
-        if (firstCharacter) {
-          firstCharacter = false;
+    CsvParsedRecord finishRow() {
+      recordNumber++;
+      if (error == null && !discard) cells.add(cell.toString());
+      final result = CsvParsedRecord(
+        recordNumber: recordNumber,
+        physicalLine: startLine,
+        fields: error == null && !discard ? cells : null,
+        error: error ?? (discard ? 'RECORD_TOO_LARGE' : null),
+      );
+      cells = <String>[];
+      cell = StringBuffer();
+      inQuotes = false;
+      quotePending = false;
+      quoteClosed = false;
+      started = false;
+      discard = false;
+      error = null;
+      recordChars = 0;
+      return result;
+    }
+
+    // Replacement decoding permits continuing past a malformed UTF-8 byte.
+    // A row containing U+FFFD is rejected instead of silently changing an ID.
+    await for (final chunk in bytes.transform(
+        const Utf8Decoder(allowMalformed: true))) {
+      for (final char in chunk.split('')) {
+        if (firstChar) {
+          firstChar = false;
           if (char == '\uFEFF') continue;
         }
-        if (skipLf) {
-          skipLf = false;
+        if (afterCr) {
+          afterCr = false;
           if (char == '\n') continue;
         }
-        if (pendingQuote) {
-          pendingQuote = false;
+
+        if (discard) {
+          if (char == '\n' || char == '\r') {
+            if (char == '\r') afterCr = true;
+            physicalLine++;
+            yield finishRow();
+            startLine = physicalLine;
+          }
+          continue;
+        }
+
+        recordChars++;
+        if (recordChars > maxRecordCharacters) {
+          error = 'RECORD_TOO_LARGE';
+          discard = true;
+          cells.clear();
+          cell = StringBuffer();
+          continue;
+        }
+
+        if (char == '\uFFFD') error ??= 'INVALID_UTF8';
+        if (quotePending) {
+          quotePending = false;
           if (char == '"') {
             cell.write('"');
             continue;
           }
           inQuotes = false;
+          quoteClosed = true;
         }
+
         if (inQuotes) {
           if (char == '"') {
-            pendingQuote = true;
+            quotePending = true;
           } else {
             cell.write(char);
+            if (char == '\n') physicalLine++;
+            if (char == '\r') {
+              physicalLine++;
+              afterCr = true;
+            }
           }
           continue;
         }
-        if (char == '"' && !fieldStarted) {
+
+        if (char == '"' && !started) {
           inQuotes = true;
-          fieldStarted = true;
+          started = true;
           continue;
         }
+
         if (char == ',') {
           cells.add(cell.toString());
           cell = StringBuffer();
-          fieldStarted = false;
+          started = false;
+          quoteClosed = false;
           continue;
         }
-        if (char == '\r' || char == '\n') {
-          cells.add(cell.toString());
-          yield cells;
-          cells = <String>[];
-          cell = StringBuffer();
-          fieldStarted = false;
-          if (char == '\r') skipLf = true;
+        if (char == '\n' || char == '\r') {
+          if (char == '\r') afterCr = true;
+          physicalLine++;
+          yield finishRow();
+          startLine = physicalLine;
           continue;
+        }
+
+        if (quoteClosed && char != ' ' && char != '\t') {
+          error ??= 'TEXT_AFTER_QUOTE';
+        }
+        if (char == '"' && started && !quoteClosed) {
+          error ??= 'QUOTE_IN_UNQUOTED_FIELD';
         }
         cell.write(char);
-        fieldStarted = true;
+        started = true;
       }
     }
-    if (inQuotes && !pendingQuote) {
-      throw const FormatException('CSV has an unclosed quoted field');
-    }
-    if (cells.isNotEmpty || fieldStarted || cell.isNotEmpty || pendingQuote) {
-      cells.add(cell.toString());
-      yield cells;
+
+    if (discard) {
+      yield finishRow();
+    } else if (inQuotes && !quotePending) {
+      error = 'UNCLOSED_QUOTE_AT_EOF';
+      yield finishRow();
+    } else if (cells.isNotEmpty || started || cell.isNotEmpty ||
+        quotePending || error != null) {
+      yield finishRow();
     }
   }
 }
