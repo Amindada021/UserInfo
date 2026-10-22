@@ -27,6 +27,9 @@ class ImportController extends ChangeNotifier {
   String stage = '';
   int readBytes = 0;
   int totalBytes = 0;
+  String passName = '';
+  int passBytes = 0;
+  int passSize = 0;
   int inserted = 0;
   int invalidRows = 0;
   int failedFiles = 0;
@@ -37,8 +40,13 @@ class ImportController extends ChangeNotifier {
   DateTime _lastLogWrite = DateTime.fromMillisecondsSinceEpoch(0);
   StringBuffer _pendingLog = StringBuffer();
 
+  // One SHA-256 read (first half) plus one CSV parse/insert read
+  // (second half). The first pass performs NO SQLite inserts.
   double? get fraction =>
       totalBytes > 0 ? (readBytes / totalBytes).clamp(0, 1) : null;
+
+  double? get passFraction =>
+      passSize > 0 ? (passBytes / passSize).clamp(0, 1) : null;
 
   /// Each corrupt record is logged with filename and position, not its raw
   /// PII fields. Writes are batched to avoid thousands of platform calls.
@@ -97,6 +105,9 @@ class ImportController extends ChangeNotifier {
         ? documents.fold<int>(0, (sum, d) => sum + d.size!) * 2
         : 0;
     readBytes = 0;
+    passName = '';
+    passBytes = 0;
+    passSize = 0;
     inserted = 0;
     invalidRows = 0;
     failedFiles = 0;
@@ -204,6 +215,7 @@ class ImportController extends ChangeNotifier {
       }
       busy = false;
       cancelling = false;
+      passName = '';
       notifyListeners();
     }
   }
@@ -228,6 +240,7 @@ class ImportController extends ChangeNotifier {
       final Uint8List? chunk = await source.read();
       if (chunk == null) break;
       readBytes += chunk.length;
+      passBytes += chunk.length;
       PerformanceMetrics.bytes += chunk.length;
       if (readBytes % (1024 * 1024) < chunk.length) notifyListeners();
       await _notifyAndroidProgress();
@@ -248,7 +261,10 @@ class ImportController extends ChangeNotifier {
     var lastRecord = 0;
     var bufferedCharacters = 0;
     try {
-      stage = 'بررسی یکپارچگی فایل برای جلوگیری از ورود تکراری';
+      passName = 'مرحله ۱ از ۲ — شناسایی فایل (بدون درج رکورد)';
+      passBytes = 0;
+      passSize = doc.size ?? 0;
+      stage = 'بررسی اثرانگشت فایل برای جلوگیری از درج تکراری';
       notifyListeners();
       await source.open(doc);
       opened = true;
@@ -266,6 +282,8 @@ class ImportController extends ChangeNotifier {
         fileId = checkpoint['file_id'] as int;
         committedRecord = checkpoint['csv_record'] as int;
       }
+      passName = 'مرحله ۲ از ۲ — خواندن CSV و درج در SQLite';
+      passBytes = 0;
       await source.open(doc);
       opened = true;
       stage = 'خواندن و ذخیره ${_safeName(doc.name)}';
