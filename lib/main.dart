@@ -486,6 +486,7 @@ class _HomePageState extends State<HomePage> {
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -517,6 +518,31 @@ class _HomePageState extends State<HomePage> {
               },
             ),
             ListTile(
+              leading: Icon(_indexStatus?.ready == true
+                  ? Icons.check_circle_outline : Icons.manage_search_outlined),
+              title: Text(_buildingIndex
+                  ? 'توقف ایندکس‌سازی'
+                  : _indexStatus?.ready == true
+                      ? 'ایندکس جستجو کامل است'
+                      : 'ساخت / ادامه ایندکس جستجو'),
+              subtitle: Text(_indexStatus == null
+                  ? 'ایندکس نام، موبایل و کد ملی — پس از ایمپورت'
+                  : _indexStatus!.ready
+                      ? 'همه رکوردهای ثبت‌شده ایندکس شده‌اند'
+                      : 'پیشرفت: ${(_indexStatus!.fraction * 100).toStringAsFixed(1)}٪ '
+                        '— فقط با فرمان شما اجرا می‌شود'),
+              enabled: !_import.busy && !_maintenanceBusy &&
+                  (_buildingIndex || _indexStatus?.ready != true),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                if (_buildingIndex) {
+                  _pauseNameIndex();
+                } else {
+                  _buildNameIndex();
+                }
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.save_alt),
               title: const Text('گرفتن بکاپ کامل دیتابیس SQLite'),
               subtitle: const Text('ذخیره فایل دیتابیس در محل انتخابی گوشی'),
@@ -535,6 +561,7 @@ class _HomePageState extends State<HomePage> {
               },
             ),
           ]),
+        ),
         ),
       ),
     );
@@ -1373,7 +1400,9 @@ class _HomePageState extends State<HomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('در حال ساخت ایندکس جستجو: '
+                      Text(_buildingIndex
+                          ? 'در حال ساخت ایندکس جستجو: '
+                          : 'ایندکس جستجو آماده نیست — پیشرفت: '
                           '${(_indexStatus!.fraction * 100).toStringAsFixed(1)}٪',
                           style: const TextStyle(fontSize: 12)),
                       Text('برآورد اولیه فضای باقی‌مانده ایندکس: حدود '
@@ -1382,9 +1411,24 @@ class _HomePageState extends State<HomePage> {
                       const SizedBox(height: 5),
                       LinearProgressIndicator(value: _indexStatus!.fraction),
                       const Text(
-                        'رکوردهای قبلی حذف نمی‌شوند. تا پایان ایندکس، '
-                        'نتایج جستجو فقط شامل بخش ایندکس‌شده است.',
+                        'ایندکس فقط با دکمه تنظیمات ساخته می‌شود. '
+                        'تا پایان آن، نتایج جستجوی نام، موبایل و کد ملی '
+                        'ممکن است ناقص باشند.',
                         style: TextStyle(fontSize: 11),
+                      ),
+                      const SizedBox(height: 5),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          icon: Icon(_buildingIndex
+                              ? Icons.pause_circle_outline : Icons.play_arrow),
+                          label: Text(_buildingIndex
+                              ? 'توقف ایندکس' : 'ساخت / ادامه ایندکس'),
+                          onPressed: _import.busy || _maintenanceBusy
+                              ? null
+                              : (_buildingIndex
+                                  ? _pauseNameIndex : _buildNameIndex),
+                        ),
                       ),
                     ],
                   ),
@@ -1441,6 +1485,15 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ]),
               )),
+            if (_import.busy)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Text('ایمپورت در حال انجام است؛ '
+                    'لیست اشخاص بعد از پایان کار بارگذاری می‌شود. '
+                    'ایندکس جستجو هم فقط با فرمان شما ساخته می‌شود.',
+                    style: TextStyle(fontSize: 12)),
+              ),
+            if (!_import.busy)
             Row(children: [
               Expanded(child: Text(_count == null ? 'نتایج جستجو' : '$_count نتیجه',
                   style: const TextStyle(fontWeight: FontWeight.bold))),
@@ -1453,8 +1506,10 @@ class _HomePageState extends State<HomePage> {
                 child: const Text('انتخاب این صفحه'),
               ),
             ]),
-            Expanded(child: _busy
-                ? const Center(child: CircularProgressIndicator())
+            Expanded(child: _import.busy
+                ? const Center(child: Icon(Icons.storage_outlined, size: 44))
+                : _busy
+                    ? const Center(child: CircularProgressIndicator())
                 : _rows.isEmpty
                     ? const Center(child: Text(
                         'رکوردی یافت نشد. ابتدا فایل CSV وارد کن.'))
@@ -1463,7 +1518,7 @@ class _HomePageState extends State<HomePage> {
                         itemBuilder: (context, i) =>
                             _personCard(_rows[i], _page * _pageSize + i),
                       )),
-            _pager(),
+            if (!_import.busy) _pager(),
           ]),
         ),
       ),
