@@ -282,6 +282,11 @@ class _HomePageState extends State<HomePage> {
         _message(_import.stage);
       }
       await _load(resetPage: true);
+      // Newly imported names were intentionally not tokenized during CSV
+      // import. Resume background indexing now that bulk inserts are done.
+      _indexStatus = await _database.nameIndexStatus();
+      if (mounted) setState(() {});
+      _buildNameIndex();
     } catch (error) {
       _message('انتخاب فایل ناموفق بود: $error');
     }
