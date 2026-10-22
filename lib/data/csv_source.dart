@@ -34,6 +34,23 @@ class CsvSource {
   Future<Uint8List?> read() async =>
       _channel.invokeMethod<Uint8List>('read');
 
+
+  /// Keep a foreground Android service active for long-running imports.
+  /// This improves screen-off survival but is not a crash/reboot resume system.
+  Future<void> protectImport(bool enabled) async =>
+      _channel.invokeMethod<void>('protectImport', {'enabled': enabled});
+
+  Future<void> reportImportProgress({
+    required int fileIndex,
+    required int fileCount,
+    required int percent,
+  }) async =>
+      _channel.invokeMethod<void>('importProgress', {
+        'fileIndex': fileIndex,
+        'fileCount': fileCount,
+        'percent': percent,
+      });
+
   Future<void> close() async => _channel.invokeMethod<void>('close');
 
   Future<Uint8List?> pdfFont() async =>

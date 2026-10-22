@@ -23,6 +23,24 @@ class ImportController extends ChangeNotifier {
   int inserted = 0;
   int invalidRows = 0;
   String? lastError;
+  DateTime _lastNativeProgress = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _notifyAndroidProgress() async {
+    final now = DateTime.now();
+    if (now.difference(_lastNativeProgress) < const Duration(seconds: 3)) {
+      return;
+    }
+    _lastNativeProgress = now;
+    try {
+      await source.reportImportProgress(
+        fileIndex: fileIndex,
+        fileCount: fileCount,
+        percent: fraction == null ? -1 : (fraction! * 100).round(),
+      );
+    } catch (_) {
+      // Never abort a CSV transaction due to a notification update.
+    }
+  }
 
   double? get fraction =>
       totalBytes > 0 ? (readBytes / totalBytes).clamp(0, 1) : null;
@@ -47,7 +65,10 @@ class ImportController extends ChangeNotifier {
     invalidRows = 0;
     lastError = null;
     notifyListeners();
+    var nativeProtectionStarted = false;
     try {
+      await source.protectImport(true);
+      nativeProtectionStarted = true;
       for (var i = 0; i < documents.length; i++) {
         if (cancelling) throw ImportCancelled();
         fileIndex = i + 1;
@@ -61,6 +82,13 @@ class ImportController extends ChangeNotifier {
       stage = 'ایمپورت متوقف شد';
       lastError = error.toString();
     } finally {
+      if (nativeProtectionStarted) {
+        try {
+          await source.protectImport(false);
+        } catch (_) {
+          // Android may already have stopped the service.
+        }
+      }
       busy = false;
       cancelling = false;
       notifyListeners();
@@ -75,6 +103,7 @@ class ImportController extends ChangeNotifier {
       readBytes += chunk.length;
       // Unknown-length sources show an indeterminate progress indicator.
       if (readBytes % (1024 * 1024) < chunk.length) notifyListeners();
+      await _notifyAndroidProgress();
       yield chunk;
     }
   }

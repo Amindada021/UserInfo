@@ -1,5 +1,8 @@
 package com.amindada021.userinfo
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.app.Activity
 import android.content.Intent
 import android.database.Cursor
@@ -42,6 +45,42 @@ class MainActivity : FlutterActivity() {
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                         }
                         startActivityForResult(intent, requestCode)
+                    }
+                }
+                "protectImport" -> {
+                    try {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        if (enabled) {
+                            val intent = Intent(this, ImportForegroundService::class.java)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                            if (Build.VERSION.SDK_INT >= 33 &&
+                                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 8613)
+                            }
+                        } else {
+                            stopService(Intent(this, ImportForegroundService::class.java))
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FOREGROUND_IMPORT_FAILED", e.message, null)
+                    }
+                }
+                "importProgress" -> {
+                    try {
+                        val intent = Intent(this, ImportForegroundService::class.java)
+                        intent.action = ImportForegroundService.ACTION_PROGRESS
+                        intent.putExtra("fileIndex", call.argument<Int>("fileIndex") ?: 0)
+                        intent.putExtra("fileCount", call.argument<Int>("fileCount") ?: 0)
+                        intent.putExtra("percent", call.argument<Int>("percent") ?: -1)
+                        startService(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        // A notification failure must never affect a CSV transaction.
+                        result.success(false)
                     }
                 }
                 "open" -> {

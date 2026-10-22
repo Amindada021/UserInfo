@@ -504,12 +504,30 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _personCard(Map<String, Object?> row) {
+  Widget _personCard(Map<String, Object?> row, int index) {
     final id = row['id'] as int;
     final name = row['full_name']?.toString() ?? 'بدون نام';
     final visible = _showFullDetails;
+    final alternate = index.isOdd;
+    final selected = _selected.contains(id);
     return Card(
       key: ValueKey(id),
+      color: selected
+          ? const Color(0xFFD9EEE5)
+          : alternate
+              ? const Color(0xFFE8F2F7)
+              : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          width: 1.2,
+          color: selected
+              ? const Color(0xFF78B69D)
+              : alternate
+                  ? const Color(0xFFBED9E8)
+                  : const Color(0xFFDCE7E2),
+        ),
+      ),
       child: ExpansionTile(
         tilePadding: const EdgeInsets.symmetric(horizontal: 10),
         childrenPadding: const EdgeInsets.only(bottom: 8),
@@ -559,6 +577,12 @@ class _HomePageState extends State<HomePage> {
               '${_import.inserted} رکورد ثبت‌شده | '
               '${_import.invalidRows} ردیف ناسازگار',
               style: const TextStyle(fontSize: 12)),
+          const Text(
+            'اجرای طولانی با اعلان اندروید محافظت می‌شود؛ '
+            'بااین‌حال خاموش‌شدن اجباری برنامه یا راه‌اندازی مجدد گوشی '
+            'می‌تواند فایل جاری را ناتمام بگذارد.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF52726B)),
+          ),
           const SizedBox(height: 8),
           LinearProgressIndicator(value: fraction),
           const SizedBox(height: 4),
@@ -753,7 +777,8 @@ class _HomePageState extends State<HomePage> {
                         'رکوردی یافت نشد. ابتدا فایل CSV وارد کن.'))
                     : ListView.builder(
                         itemCount: _rows.length,
-                        itemBuilder: (context, i) => _personCard(_rows[i]),
+                        itemBuilder: (context, i) =>
+                            _personCard(_rows[i], _page * _pageSize + i),
                       )),
             _pager(),
           ]),
