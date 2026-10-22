@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 import '../core/text_normalizer.dart';
@@ -6,6 +7,7 @@ class SearchFilters {
   const SearchFilters({
     this.query = '',
     this.searchType = 'name',
+    this.favoritesOnly = false,
     this.bank = '',
     this.fields = const {},
     this.missingMobile = false,
@@ -14,6 +16,7 @@ class SearchFilters {
   });
   final String query;
   final String searchType;
+  final bool favoritesOnly;
   final String bank;
   final Map<String, String> fields;
   final bool missingMobile;
@@ -33,13 +36,14 @@ class UserInfoDatabase {
   Database? _db;
   bool _nameIndexReady = false;
   bool _nameIndexBuildRunning = false;
+  bool _maintenanceRunning = false;
   Future<Database> get db async => _db ??= await _open();
 
   Future<Database> _open() async {
     final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
     final database = await openDatabase(
       location,
-      version: 3,
+      version: 4,
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // Preserve imported people while irreversibly removing source-file metadata.
@@ -49,6 +53,9 @@ class UserInfoDatabase {
         }
         if (oldVersion < 3) {
           await _setupNameIndex(database, existingRecords: true);
+        }
+        if (oldVersion < 4) {
+          await _setupFavorites(database);
         }
       },
       onConfigure: (database) async {
@@ -98,6 +105,7 @@ class UserInfoDatabase {
             'CREATE INDEX idx_records_mobile ON records(mobile)');
         await database.execute('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
         await _setupNameIndex(database, existingRecords: false);
+        await _setupFavorites(database);
       },
     );
     _nameIndexReady = (await _readNameIndexStatus(database)).ready;
@@ -136,6 +144,11 @@ class UserInfoDatabase {
     await executor.insert('app_settings',
         {'key': 'name_index_cursor', 'value': '0'},
         conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> _setupFavorites(DatabaseExecutor executor) async {
+    await executor.execute('CREATE TABLE IF NOT EXISTS favorites ('
+        'record_id INTEGER PRIMARY KEY REFERENCES records(id) ON DELETE CASCADE)');
   }
 
   Future<NameIndexStatus> _readNameIndexStatus(
@@ -304,6 +317,9 @@ class UserInfoDatabase {
   (String, List<Object?>) _where(SearchFilters filters) {
     final conditions = <String>[];
     final args = <Object?>[];
+    if (filters.favoritesOnly) {
+      conditions.add('r.id IN (SELECT record_id FROM favorites)');
+    }
     if (filters.bank.isNotEmpty) {
       conditions.add('r.bank = ?');
       args.add(filters.bank);
@@ -391,10 +407,102 @@ class UserInfoDatabase {
     final database = await db;
     final (where, args) = _where(filters);
     return database.rawQuery('''
-      SELECT r.* FROM ${_from(filters)} $where
+      SELECT r.*, EXISTS(SELECT 1 FROM favorites f WHERE f.record_id = r.id) AS is_favorite
+      FROM ${_from(filters)} $where
       ORDER BY r.id DESC
       LIMIT ? OFFSET ?
     ''', [...args, pageSize, page * pageSize]);
+  }
+
+  Future<bool> toggleFavorite(int id) async {
+    final database = await db;
+    final exists = await database.query('favorites',
+        where: 'record_id = ?', whereArgs: [id], limit: 1);
+    if (exists.isNotEmpty) {
+      await database.delete('favorites', where: 'record_id = ?', whereArgs: [id]);
+      return false;
+    }
+    await database.insert('favorites', {'record_id': id},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+    return true;
+  }
+
+  Future<void> updatePerson(int id, Map<String, String?> changed) async {
+    final valid = <String, Object?>{};
+    for (final entry in changed.entries) {
+      if (!allowedFields.contains(entry.key)) {
+        throw ArgumentError('Invalid field: ${entry.key}');
+      }
+      valid[entry.key] = TextNormalizer.cleaned(entry.value);
+    }
+    if (valid.isEmpty) return;
+    if (valid.containsKey('full_name')) {
+      valid['normalized_name'] = TextNormalizer.normalize(
+          valid['full_name']?.toString() ?? '');
+    }
+    if (valid.containsKey('father_name')) {
+      valid['normalized_father'] = TextNormalizer.normalize(
+          valid['father_name']?.toString() ?? '');
+    }
+    if (valid.containsKey('city_name')) {
+      valid['normalized_city'] = TextNormalizer.normalize(
+          valid['city_name']?.toString() ?? '');
+    }
+    if (valid.containsKey('province_name')) {
+      valid['normalized_province'] = TextNormalizer.normalize(
+          valid['province_name']?.toString() ?? '');
+    }
+    final database = await db;
+    final n = await database.update('records', valid,
+        where: 'id = ?', whereArgs: [id]);
+    if (n != 1) throw StateError('Record was not found');
+  }
+
+  Future<String> getSetting(String key, {String fallback = ''}) async {
+    final database = await db;
+    final rows = await database.query('app_settings', columns: ['value'],
+        where: 'key = ?', whereArgs: [key], limit: 1);
+    return rows.isEmpty ? fallback : rows.first['value'].toString();
+  }
+
+  Future<void> setSetting(String key, String value) async {
+    final database = await db;
+    await database.insert('app_settings', {'key': key, 'value': value},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// Block other UI operations while SQLite is closed for a consistent
+  /// streamable on-device backup. Never load database bytes in RAM.
+  Future<T> withDatabaseClosed<T>(Future<T> Function(String path) task) async {
+    if (_maintenanceRunning) throw StateError('Database maintenance active');
+    _maintenanceRunning = true;
+    final filePath = path.join(await getDatabasesPath(), 'userinfo.sqlite');
+    try {
+      await _db?.close();
+      _db = null;
+      return await task(filePath);
+    } finally {
+      _maintenanceRunning = false;
+    }
+  }
+
+  Future<void> validateDatabaseFile(String filename) async {
+    if (!await File(filename).exists()) throw StateError('Backup is missing');
+    final testDb = await openDatabase(filename, readOnly: true);
+    try {
+      final result = await testDb.rawQuery('PRAGMA quick_check');
+      if (result.isEmpty || result.first.values.first != 'ok') {
+        throw const FormatException('SQLite quick_check failed');
+      }
+      final tables = await testDb.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'table' "
+          "AND name IN ('records','files','app_settings')");
+      if (tables.length != 3) {
+        throw const FormatException('Not a UserInfo database');
+      }
+    } finally {
+      await testDb.close();
+    }
   }
 
   Future<List<Map<String, Object?>>> byIds(Iterable<int> ids) async {
@@ -419,6 +527,7 @@ class UserInfoDatabase {
     final database = await db;
     await database.transaction((tx) async {
       await tx.delete('records');
+      await tx.delete('favorites');
       await tx.delete('files');
       await tx.insert('app_settings',
           {'key': 'name_index_target', 'value': '0'},
