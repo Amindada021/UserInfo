@@ -139,6 +139,18 @@ jobs:
           PY
           echo "mode=persistent" >> "$GITHUB_OUTPUT"
 
+      # Never distribute randomly debug-signed builds from main.
+      # Users have lost on-device SQLite data after being forced to uninstall
+      # an incompatible signature. PRs may still exercise debug-signed builds.
+      - name: Require permanent APK signing for main
+        if: github.ref == 'refs/heads/main' && steps.signing.outputs.mode != 'persistent'
+        shell: bash
+        run: |
+          echo "::error::Release blocked: stable Android signing secrets are missing."
+          echo "::error::Set all four USERINFO_ANDROID_* GitHub Actions secrets according to docs/ANDROID_SIGNING_AND_TRANSFER.md."
+          echo "::error::Do not uninstall the existing app unless a separate backup has been successfully restored and verified."
+          exit 1
+
       - name: Build release APK
         shell: bash
         env:
