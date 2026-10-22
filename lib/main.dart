@@ -400,30 +400,249 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _openSettings() async {
-    final showFull = await showModalBottomSheet<bool>(
+    await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('تنظیمات نمایش',
+            const Text('تنظیمات UserInfo',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             SwitchListTile.adaptive(
               title: const Text('نمایش اطلاعات کامل همه اشخاص'),
-              subtitle: const Text('یک تنظیم برای تمام کارت‌ها، نه جداگانه برای هر شخص'),
               value: _showFullDetails,
-              onChanged: (v) => Navigator.pop(sheetContext, v),
+              onChanged: (value) async {
+                if (value && !await _confirmSensitive()) return;
+                await _database.setShowFullDetails(value);
+                if (mounted) setState(() => _showFullDetails = value);
+                if (sheetContext.mounted) Navigator.pop(sheetContext);
+              },
             ),
-            const SizedBox(height: 8),
+            ListTile(
+              leading: Icon(AppAppearance.mode.value == ThemeMode.dark
+                  ? Icons.dark_mode : Icons.light_mode),
+              title: const Text('حالت روشن / تاریک'),
+              subtitle: Text(AppAppearance.mode.value == ThemeMode.dark
+                  ? 'تاریک' : 'روشن'),
+              onTap: () async {
+                final next = AppAppearance.mode.value == ThemeMode.dark
+                    ? ThemeMode.light : ThemeMode.dark;
+                await _database.setSetting(
+                    'theme_mode', next == ThemeMode.dark ? 'dark' : 'light');
+                AppAppearance.mode.value = next;
+                if (sheetContext.mounted) Navigator.pop(sheetContext);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.save_alt),
+              title: const Text('گرفتن بکاپ کامل دیتابیس SQLite'),
+              subtitle: const Text('ذخیره فایل دیتابیس در محل انتخابی گوشی'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _backupDatabase();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_backup_restore),
+              title: const Text('بازیابی دیتابیس از بکاپ'),
+              subtitle: const Text('جایگزین اطلاعات فعلی؛ نیازمند تأیید'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _restoreDatabase();
+              },
+            ),
           ]),
         ),
       ),
     );
-    if (showFull == null || showFull == _showFullDetails) return;
-    if (showFull && !await _confirmSensitive()) return;
-    await _database.setShowFullDetails(showFull);
-    if (mounted) setState(() => _showFullDetails = showFull);
+  }
+
+  Future<void> _backupDatabase() async {
+    if (_import.busy || _maintenanceBusy) {
+      _message('هنگام ایمپورت یا انتقال قبلی، بکاپ ممکن نیست');
+      return;
+    }
+    setState(() => _maintenanceBusy = true);
+    try {
+      final bytes = await _transfer.exportDatabase();
+      _message('بکاپ دیتابیس ذخیره شد: $bytes بایت');
+    } catch (error) {
+      _message('بکاپ ذخیره نشد یا انتخاب فایل لغو شد: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _maintenanceBusy = false);
+        _buildNameIndex();
+      }
+    }
+  }
+
+  Future<void> _restoreDatabase() async {
+    if (_import.busy || _maintenanceBusy) {
+      _message('هنگام ایمپورت، بازیابی دیتابیس ممکن نیست');
+      return;
+    }
+    final approved = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('بازیابی کامل دیتابیس'),
+        content: const Text(
+          'اطلاعات فعلی با دیتابیس بکاپ جایگزین می‌شوند. '
+          'پیش از ادامه یک نسخه پشتیبان جداگانه داشته باش. '
+          'این عملیات ممکن است روی دیتابیس بزرگ طولانی شود. ادامه می‌دهی؟',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false),
+              child: const Text('انصراف')),
+          FilledButton(onPressed: () => Navigator.pop(c, true),
+              child: const Text('انتخاب بکاپ و بازیابی')),
+        ],
+      ),
+    ) ?? false;
+    if (!approved || !mounted) return;
+    setState(() => _maintenanceBusy = true);
+    try {
+      await _transfer.restoreDatabase();
+      _selected.clear();
+      _partialRecords = await _database.partialRecordCount();
+      _indexStatus = await _database.nameIndexStatus();
+      await _loadAfterRestore();
+      _message('دیتابیس از بکاپ بازیابی شد');
+    } catch (error) {
+      _message('بازیابی انجام نشد: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _maintenanceBusy = false);
+        await _load(resetPage: true);
+        _buildNameIndex();
+      }
+    }
+  }
+
+  Future<void> _loadAfterRestore() async {
+    // Restore closes the prior SQLite handle; the next query opens the new DB.
+    _showFullDetails = await _database.showFullDetails();
+    final theme = await _database.getSetting('theme_mode');
+    AppAppearance.mode.value =
+        theme == 'dark' ? ThemeMode.dark : ThemeMode.light;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleFavorite(Map<String, Object?> record) async {
+    try {
+      final nowFavorite = await _database.toggleFavorite(record['id'] as int);
+      if (_favoritesOnly && !nowFavorite) {
+        await _load(resetPage: true);
+      } else if (mounted) {
+        setState(() {
+          final idx = _rows.indexWhere((r) => r['id'] == record['id']);
+          if (idx >= 0) {
+            final updated = Map<String, Object?>.from(_rows[idx]);
+            updated['is_favorite'] = nowFavorite ? 1 : 0;
+            _rows = [..._rows]..[idx] = updated;
+          }
+        });
+      }
+    } catch (error) {
+      _message('تغییر علاقه‌مندی ناموفق بود: $error');
+    }
+  }
+
+  String _recordAsText(Map<String, Object?> record) =>
+      ExportService.fullColumns
+          .where((key) => (record[key] ?? '').toString().isNotEmpty)
+          .map((key) => '${ExportService.labels[key]}: ${record[key]}')
+          .join('\n');
+
+  Future<void> _sharePerson(Map<String, Object?> record) async {
+    if (!await _confirmSensitive()) return;
+    try {
+      await SharePlus.instance.share(ShareParams(
+        text: _recordAsText(record), subject: 'اطلاعات شخص UserInfo'));
+    } catch (error) {
+      _message('اشتراک‌گذاری انجام نشد: $error');
+    }
+  }
+
+  Future<void> _shareSelection() async {
+    if (_selected.isEmpty || _selected.length > 500) {
+      _message('برای اشتراک‌گذاری متنی بین ۱ تا ۵۰۰ رکورد انتخاب کن');
+      return;
+    }
+    if (!await _confirmSensitive()) return;
+    try {
+      final rows = await _database.byIds(_selected);
+      await SharePlus.instance.share(ShareParams(
+        text: rows.map(_recordAsText).join('\n\n──────────\n\n'),
+        subject: 'اطلاعات منتخب UserInfo',
+      ));
+    } catch (error) {
+      _message('اشتراک‌گذاری ناموفق بود: $error');
+    }
+  }
+
+  Future<void> _editPerson(Map<String, Object?> record) async {
+    if (_import.busy || _maintenanceBusy) {
+      _message('ویرایش پس از پایان ایمپورت امکان‌پذیر است');
+      return;
+    }
+    final controllers = {
+      for (final field in UserInfoDatabase.allowedFields)
+        field: TextEditingController(text: (record[field] ?? '').toString()),
+    };
+    try {
+      final save = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (sheetContext) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                16, 4, 16, MediaQuery.viewInsetsOf(sheetContext).bottom + 16),
+            child: SizedBox(
+              height: MediaQuery.sizeOf(sheetContext).height * 0.8,
+              child: Column(children: [
+                const Text('ویرایش اطلاعات شخص',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Expanded(child: ListView(children: [
+                  for (final field in UserInfoDatabase.allowedFields)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      child: TextField(
+                        controller: controllers[field],
+                        decoration: InputDecoration(
+                            labelText: ExportService.labels[field] ?? field),
+                      ),
+                    ),
+                ])),
+                FilledButton.icon(
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('ذخیره تغییرات'),
+                  onPressed: () => Navigator.pop(sheetContext, true),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      );
+      if (save != true) return;
+      final changed = <String, String?>{
+        for (final item in controllers.entries)
+          if (item.value.text != (record[item.key] ?? '').toString())
+            item.key: item.value.text,
+      };
+      if (changed.isEmpty) return;
+      await _database.updatePerson(record['id'] as int, changed);
+      await _load();
+      _message('اطلاعات ویرایش شد');
+    } catch (error) {
+      _message('ویرایش ذخیره نشد: $error');
+    } finally {
+      for (final controller in controllers.values) {
+        controller.dispose();
+      }
+    }
   }
 
   Future<void> _deleteEverything() async {
