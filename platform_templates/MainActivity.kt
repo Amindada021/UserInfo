@@ -203,7 +203,7 @@ class MainActivity : FlutterActivity() {
                     ioExecutor.execute {
                         try {
                             val stream = currentStream ?: error("No input stream")
-                            val buffer = ByteArray(256 * 1024)
+                            val buffer = ByteArray(1024 * 1024)
                             val count = stream.read(buffer)
                             runOnUiThread {
                                 result.success(if (count < 0) null else buffer.copyOf(count))
