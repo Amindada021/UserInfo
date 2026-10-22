@@ -1190,11 +1190,29 @@ class _HomePageState extends State<HomePage> {
             style: TextStyle(fontSize: 11, color: Color(0xFF52726B)),
           ),
           const SizedBox(height: 8),
+          if (_import.passName.isNotEmpty) ...[
+            Text(_import.passName,
+              style: const TextStyle(fontSize: 12,
+                  fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            LinearProgressIndicator(value: _import.passFraction),
+            Text(_import.passFraction == null
+                ? 'اندازه فایل برای این مرحله مشخص نیست'
+                : '${(_import.passFraction! * 100).toStringAsFixed(1)}٪ '
+                  'از مرحله جاری',
+                style: const TextStyle(fontSize: 12)),
+            if (_import.passName.contains('مرحله ۱'))
+              const Text('در این مرحله هنوز رکوردی درج نمی‌شود؛ '
+                  'فایل برای جلوگیری از ورود تکراری بررسی می‌شود.',
+                  style: TextStyle(fontSize: 11)),
+          ],
+          const SizedBox(height: 6),
           LinearProgressIndicator(value: fraction),
           const SizedBox(height: 4),
           Text(fraction == null
-                  ? 'درصد نامعلوم (حجم فایل اعلام نشده)'
-                  : '${(fraction * 100).toStringAsFixed(1)}٪ از بایت‌های ورودی خوانده شده',
+                  ? 'پیشرفت کل نامعلوم (حجم فایل اعلام نشده)'
+                  : '${(fraction * 100).toStringAsFixed(1)}٪ '
+                    'از مجموع دو مرحله خواندن فایل',
               style: const TextStyle(fontSize: 12)),
           Text('ردیف‌های ردشده: ${_import.invalidRows} | '
               'فایل‌های ناقص: ${_import.failedFiles}',
