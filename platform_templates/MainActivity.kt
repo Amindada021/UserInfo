@@ -283,34 +283,7 @@ class MainActivity : FlutterActivity() {
                         }
                     } else {
                         transferFile.parentFile?.mkdirs()
-                        val total = restoreSourceSize(uri)
-                        val started = SystemClock.elapsedRealtime()
-                        var lastPublished = 0L
-                        var totalCopied = 0L
-                        postRestoreProgress(0, total, 0)
-                        (contentResolver.openInputStream(uri)
-                            ?: error("Cannot read selected backup")).use { input ->
-                            FileOutputStream(transferFile).buffered(1024 * 1024).use { output ->
-                                val block = ByteArray(1024 * 1024)
-                                while (true) {
-                                    val n = input.read(block)
-                                    if (n < 0) break
-                                    if (n == 0) continue
-                                    output.write(block, 0, n)
-                                    totalCopied += n
-                                    val elapsed = SystemClock.elapsedRealtime() - started
-                                    if (elapsed - lastPublished >= 250) {
-                                        lastPublished = elapsed
-                                        postRestoreProgress(totalCopied, total, elapsed)
-                                    }
-                                }
-                                output.flush()
-                            }
-                        }
-                        postRestoreProgress(
-                            totalCopied, total,
-                            SystemClock.elapsedRealtime() - started)
-                        totalCopied
+                        restoreDatabaseCopy(uri, transferFile)
                     }
                     runOnUiThread { callback.success(copied) }
                 } catch (e: Exception) {
@@ -357,6 +330,98 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             callback.error("PICK_FAILED", e.message, null)
         }
+    }
+
+    /**
+     * Copy a multi-gigabyte SQLite backup without loading it in Flutter RAM.
+     * Try kernel-assisted transferTo for a seekable SAF file descriptor, then
+     * fall back to a bounded 4 MiB streaming copy for pipes/cloud providers.
+     * The source is never modified and the target remains a staging file.
+     */
+    private fun restoreDatabaseCopy(uri: Uri, target: File): Long {
+        val total = restoreSourceSize(uri)
+        val started = SystemClock.elapsedRealtime()
+        var lastPublished = 0L
+        var copied = 0L
+        postRestoreProgress(0, total, 0)
+
+        // Check free space *before* writing a large staging file.
+        if (total != null) {
+            val storage = android.os.StatFs(target.parentFile!!.absolutePath)
+            val reserve = 128L * 1024L * 1024L
+            if (total > storage.availableBytes - reserve) {
+                error("Not enough free storage for the selected SQLite backup")
+            }
+        }
+
+        fun report(force: Boolean = false) {
+            val elapsed = SystemClock.elapsedRealtime() - started
+            if (force || elapsed - lastPublished >= 250) {
+                lastPublished = elapsed
+                postRestoreProgress(copied, total, elapsed)
+            }
+        }
+
+        // File-backed SAF documents can often be copied through the kernel.
+        // Cloud providers and pipes must use the buffered fallback.
+        var usedFastPath = false
+        try {
+            contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                val size = descriptor.statSize
+                if (size > 0L && (total == null || total == size)) {
+                    java.io.FileInputStream(descriptor.fileDescriptor).channel.use { input ->
+                        FileOutputStream(target, false).channel.use { output ->
+                            var position = 0L
+                            while (position < size) {
+                                val length = minOf(16L * 1024L * 1024L, size - position)
+                                val n = input.transferTo(position, length, output)
+                                if (n <= 0L) {
+                                    throw java.io.IOException("Channel transfer unavailable")
+                                }
+                                position += n
+                                copied = position
+                                report()
+                            }
+                            output.force(false)
+                        }
+                    }
+                    usedFastPath = true
+                }
+            }
+        } catch (_: Exception) {
+            // Reopen the original source and overwrite incomplete staging data.
+            // A failed fast path never changes the live database.
+            copied = 0L
+            report(true)
+        }
+
+        if (!usedFastPath) {
+            copied = 0L
+            report(true)
+            (contentResolver.openInputStream(uri)
+                ?: error("Cannot read selected backup")).use { input ->
+                FileOutputStream(target, false).use { output ->
+                    val buffer = ByteArray(4 * 1024 * 1024)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        output.write(buffer, 0, n)
+                        copied += n
+                        report()
+                    }
+                    output.fd.sync()
+                }
+            }
+        }
+
+        // Defend against prematurely terminated SAF streams.
+        if (total != null && copied != total) {
+            throw java.io.IOException(
+                "Restore copy size mismatch: copied $copied of $total bytes")
+        }
+        report(true)
+        return copied
     }
 
     /** Document providers can omit SIZE; in that case we show bytes only. */
