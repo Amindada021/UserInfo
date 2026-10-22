@@ -91,7 +91,7 @@ def chunk(tag, data):
 
 def png(width, height):
     pixels = build_icon(width)
-    header = b'\\x89PNG\\r\\n\\x1a\\n'
+    header = b'\x89PNG\r\n\x1a\n'
     return (header +
             chunk(b'IHDR', struct.pack('>IIBBBBB',width,height,8,6,0,0,0)) +
             chunk(b'IDAT', zlib.compress(pixels, 7)) +
