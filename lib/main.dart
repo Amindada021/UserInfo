@@ -110,9 +110,8 @@ class _HomePageState extends State<HomePage> {
   bool _busy = true;
   bool _showImportSummary = false;
   int _partialRecords = 0;
-  bool _refreshInProgress = false;
-  DateTime _lastImportRefresh = DateTime.fromMillisecondsSinceEpoch(0);
-  int _lastImportRefreshCount = 0;
+  bool _indexPauseRequested = false;
+  DateTime _lastImportRepaint = DateTime.fromMillisecondsSinceEpoch(0);
   Map<String, String> _fieldFilters = {};
   String _birthFrom = '';
   String _birthTo = '';
@@ -135,32 +134,18 @@ class _HomePageState extends State<HomePage> {
     _bootstrap();
   }
 
+  // Import progress only: never compete with SQLite writes by querying the
+  // people list while a multi-gigabyte CSV is being imported.
   void _onImportChanged() {
     if (!mounted) return;
-    setState(() {});
     final now = DateTime.now();
     if (_import.busy &&
-        _import.inserted - _lastImportRefreshCount >= 2500 &&
-        now.difference(_lastImportRefresh) >= const Duration(seconds: 6)) {
-      _lastImportRefresh = now;
-      _lastImportRefreshCount = _import.inserted;
-      _refreshVisibleDuringImport();
+        now.difference(_lastImportRepaint) <
+            const Duration(milliseconds: 350)) {
+      return;
     }
-  }
-
-  /// Progress is committed batch by batch; keep the list visible while the
-  /// long import runs, without repeatedly entering the full-screen busy state.
-  Future<void> _refreshVisibleDuringImport() async {
-    if (_refreshInProgress) return;
-    _refreshInProgress = true;
-    try {
-      // Refresh through the same generation guard and cursor as typed queries.
-      await _load();
-    } catch (_) {
-      // A transient concurrent-read failure must not stop the importer.
-    } finally {
-      _refreshInProgress = false;
-    }
+    _lastImportRepaint = now;
+    setState(() {});
   }
 
   Future<void> _bootstrap() async {
@@ -173,29 +158,35 @@ class _HomePageState extends State<HomePage> {
           savedTheme == 'dark' ? ThemeMode.dark : ThemeMode.light;
       _indexStatus = await _database.nameIndexStatus();
       await _load();
-      _buildNameIndex();
+      // Index creation is an explicit user action in Settings.
     } catch (error) {
       _message('خطای راه‌اندازی دیتابیس: $error');
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  /// User-triggered, resumable name + identifier indexing. Import is
+  /// deliberately prioritized: the two never compete for SQLite write locks.
   Future<void> _buildNameIndex() async {
-    if (_buildingIndex || _maintenanceBusy) return;
-    _buildingIndex = true;
+    if (_buildingIndex) return;
+    if (_import.busy || _maintenanceBusy) {
+      _message('ساخت ایندکس فقط بعد از پایان ایمپورت یا ریستور ممکن است');
+      return;
+    }
+    _indexPauseRequested = false;
+    if (mounted) setState(() {
+      _buildingIndex = true;
+      _indexError = null;
+    });
+    await _safeKeepScreenOn(true);
     try {
       var status = await _database.nameIndexStatus();
+      if (mounted) setState(() => _indexStatus = status);
       var checkedAt = -100000;
+      var updatedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-      while (mounted && !status.ready && !_maintenanceBusy) {
-        // Avoid competing for SQLite writes while importing millions of rows.
-        if (_import.busy) {
-          await Future<void>.delayed(const Duration(milliseconds: 400));
-          status = await _database.nameIndexStatus();
-          continue;
-        }
-        // Keep each SQLite transaction bounded, so interruption does not
-        // discard the indexed part of a 5M or 100M-record database.
+      while (mounted && !status.ready && !_maintenanceBusy &&
+          !_import.busy && !_indexPauseRequested) {
         if (status.done - checkedAt >= 100000) {
           final available = await _source.freeBytes();
           if (available < 64 * 1024 * 1024) {
@@ -204,27 +195,44 @@ class _HomePageState extends State<HomePage> {
           checkedAt = status.done;
         }
         status = await _database.buildNameIndexChunk(limit: 2500);
-        if (mounted) setState(() => _indexStatus = status);
+        final now = DateTime.now();
+        if (mounted && (status.ready ||
+            now.difference(updatedAt) >= const Duration(milliseconds: 300))) {
+          setState(() => _indexStatus = status);
+          updatedAt = now;
+        }
+        // Give the display thread time to repaint and respond to Pause.
         await Future<void>.delayed(const Duration(milliseconds: 30));
       }
-      if (mounted && status.ready) {
-        setState(() {
-          _indexStatus = status;
-          _indexError = null;
-        });
-        await _load(resetPage: true);
+      if (mounted) {
+        setState(() => _indexStatus = status);
+        if (status.ready) {
+          _message('ایندکس نام، موبایل و کد ملی تکمیل شد');
+          await _load(resetPage: true);
+        } else if (_indexPauseRequested) {
+          _message('ایندکس متوقف شد؛ پیشرفت ثبت شده و قابل ادامه است');
+        }
       }
     } catch (error) {
       if (mounted) setState(() => _indexError = error.toString());
     } finally {
-      _buildingIndex = false;
+      await _safeKeepScreenOn(false);
+      if (mounted) setState(() {
+        _buildingIndex = false;
+        _indexPauseRequested = false;
+      });
     }
+  }
+
+  void _pauseNameIndex() {
+    if (!_buildingIndex) return;
+    setState(() => _indexPauseRequested = true);
   }
 
   int _searchGeneration = 0;
 
   Future<void> _load({bool resetPage = false}) async {
-    if (_maintenanceBusy) return;
+    if (_maintenanceBusy || _import.busy) return;
     if (resetPage) {
       _page = 0;
       _pageCursors..clear()..add(null);
@@ -289,7 +297,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _pickAndImport() async {
-    if (_import.busy) return;
+    if (_import.busy || _maintenanceBusy || _buildingIndex) {
+      _message('ابتدا عملیات فعلی یا ایندکس‌سازی را به پایان برسان');
+      return;
+    }
     var keepScreen = false;
     try {
       final documents = await _source.pick();
@@ -306,7 +317,13 @@ class _HomePageState extends State<HomePage> {
         ));
         if (proceed != true) return;
       }
-      if (mounted) setState(() => _showImportSummary = true);
+      if (mounted) setState(() {
+        _showImportSummary = true;
+        _rows = const [];
+        _hasNext = false;
+        _count = null;
+        _busy = false;
+      });
       keepScreen = true;
       await _safeKeepScreenOn(true);
       await _import.importDocuments(documents);
@@ -317,11 +334,9 @@ class _HomePageState extends State<HomePage> {
         _message(_import.stage);
       }
       await _load(resetPage: true);
-      // Newly imported names were intentionally not tokenized during CSV
-      // import. Resume background indexing now that bulk inserts are done.
       _indexStatus = await _database.nameIndexStatus();
       if (mounted) setState(() {});
-      _buildNameIndex();
+      // Deliberately leave indexing pending until Settings > Build Index.
     } catch (error) {
       _message('انتخاب فایل ناموفق بود: $error');
     } finally {
@@ -526,7 +541,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _backupDatabase() async {
-    if (_import.busy || _maintenanceBusy) {
+    if (_import.busy || _maintenanceBusy || _buildingIndex) {
       _message('هنگام ایمپورت یا انتقال قبلی، بکاپ ممکن نیست');
       return;
     }
@@ -541,13 +556,12 @@ class _HomePageState extends State<HomePage> {
       await _safeKeepScreenOn(false);
       if (mounted) {
         setState(() => _maintenanceBusy = false);
-        _buildNameIndex();
       }
     }
   }
 
   Future<void> _restoreDatabase() async {
-    if (_import.busy || _maintenanceBusy) {
+    if (_import.busy || _maintenanceBusy || _buildingIndex) {
       _message('هنگام ایمپورت، بازیابی دیتابیس ممکن نیست');
       return;
     }
@@ -606,7 +620,6 @@ class _HomePageState extends State<HomePage> {
           _restoreProgress = null;
         });
         await _load(resetPage: true);
-        _buildNameIndex();
       }
     }
     if (restoreError != null && mounted) {
