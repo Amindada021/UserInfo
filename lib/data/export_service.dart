@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:excel/excel.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -111,11 +112,12 @@ class ExportService {
               borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
             ),
             child: pw.Text(
-              '${index + 1}. ' +
-                  keys.where((key) =>
+              [
+                '${index + 1}.',
+                ...keys.where((key) =>
                     (records[index][key] ?? '').toString().isNotEmpty)
-                    .map((key) => '${labels[key]}: ${records[index][key]}')
-                    .join('\n'),
+                  .map((key) => '${labels[key]}: ${records[index][key]}'),
+              ].join('\\n'),
               textDirection: pw.TextDirection.rtl,
               style: pw.TextStyle(font: font, fontSize: 11),
             ),
@@ -129,7 +131,7 @@ class ExportService {
       {required bool sensitive}) async {
     final bytes = await generatePdf(records, sensitive: sensitive);
     await Printing.sharePdf(
-      bytes: bytes, filename: 'UserInfo-${DateTime.now().millisecondsSinceEpoch}.pdf');
+      bytes: Uint8List.fromList(bytes), filename: 'UserInfo-${DateTime.now().millisecondsSinceEpoch}.pdf');
   }
 
   static void _validate(List<Map<String, Object?>> records) {
