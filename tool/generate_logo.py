@@ -89,8 +89,9 @@ def chunk(tag, data):
         '>I', zlib.crc32(tag + data) & 0xFFFFFFFF)
 
 
-def png(width, height):
-    pixels = build_icon(width)
+def png(size):
+    width = height = size
+    pixels = build_icon(size)
     header = b'\x89PNG\r\n\x1a\n'
     return (header +
             chunk(b'IHDR', struct.pack('>IIBBBBB',width,height,8,6,0,0,0)) +
