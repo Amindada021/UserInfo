@@ -154,8 +154,8 @@ class UserInfoDatabase {
     return database;
   }
 
-  /// Indexed names are derived from normalized_name; no original identities
-  /// or personal banking fields are copied into the FTS4 index.
+  /// Derived normalized names are still personal data. Neither this index
+  /// nor the database is encrypted by the static application passcode.
   Future<void> _setupNameIndex(DatabaseExecutor executor,
       {required bool existingRecords}) async {
     await executor.execute(
@@ -339,8 +339,9 @@ class UserInfoDatabase {
         final next = rows.length < limit ? current.target : rows.last['id'] as int;
         await PerformanceMetrics.measure('index_backfill_sql', () async {
           await tx.rawInsert(
-            'INSERT OR REPLACE INTO record_name_fts(docid, normalized_name) '
-            'SELECT id, normalized_name FROM records WHERE id > ? AND id <= ?',
+            'INSERT INTO record_name_fts(docid, normalized_name) '
+            'SELECT id, normalized_name FROM records r WHERE id > ? AND id <= ? '
+            'AND NOT EXISTS(SELECT 1 FROM record_name_fts f WHERE f.docid = r.id)',
             [current.done, next]);
           await tx.rawInsert(
             'INSERT OR REPLACE INTO record_identifiers(record_id, mobile, national) '
@@ -738,7 +739,7 @@ class UserInfoDatabase {
   Future<Map<String, Object?>> performanceSnapshot() async {
     final database = await db;
     final output = <String, Object?>{'metrics': PerformanceMetrics.snapshot()};
-    for (final pragma in ['journal_mode','synchronous','cache_size','temp_store','mmap_size','page_count','page_size','freelist_count']) {
+    for (final pragma in ['journal_mode','synchronous','cache_size','temp_store','mmap_size','page_count','page_size','freelist_count','compile_options']) {
       output[pragma] = await database.rawQuery('PRAGMA $pragma');
     }
     output['sqlite_version'] = await database.rawQuery('SELECT sqlite_version()');

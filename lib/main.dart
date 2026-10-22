@@ -99,6 +99,7 @@ class _HomePageState extends State<HomePage> {
   int _pageSize = 20;
   int? _count;
   bool _hasNext = false;
+  bool _counting = false;
   final List<int?> _pageCursors = [null];
   String _bank = '';
   bool _missingMobile = false;
@@ -1012,7 +1013,8 @@ class _HomePageState extends State<HomePage> {
             Text('$start تا $end${_count == null ? '' : ' از $_count'}',
                 style: const TextStyle(fontSize: 12)),
             TextButton(
-              onPressed: _busy ? null : () async {
+              onPressed: _busy || _counting ? null : () async {
+                setState(() => _counting = true);
                 final generation = _searchGeneration;
                 try {
                   final count = await _database.count(_filter);
@@ -1021,6 +1023,8 @@ class _HomePageState extends State<HomePage> {
                   }
                 } catch (_) {
                   _message('شمارش دقیق انجام نشد');
+                } finally {
+                  if (mounted) setState(() => _counting = false);
                 }
               },
               child: const Text('شمارش دقیق'),

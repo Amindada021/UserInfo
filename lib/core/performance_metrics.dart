@@ -28,6 +28,10 @@ class PerformanceMetrics {
     'bytes': bytes,
     'rss_bytes': ProcessInfo.currentRss,
     'max_rss_bytes': ProcessInfo.maxRss,
+    if ((_stages['import_total']?.total ?? 0) > 0)
+      'import_rows_sec': rows * 1000000 / _stages['import_total']!.total,
+    if ((_stages['import_total']?.total ?? 0) > 0)
+      'source_read_MB_sec': bytes / _stages['import_total']!.total,
     'stages': _stages.map((key, value) => MapEntry(key, value.snapshot())),
   };
 

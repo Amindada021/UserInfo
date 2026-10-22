@@ -68,6 +68,7 @@ void main() {
       await handle.execute('DROP TRIGGER $trigger');
     }
     await handle.execute('DROP TABLE record_identifiers');
+    await handle.execute('DROP TABLE import_checkpoints');
     await handle.setVersion(5);
     final before = await database.byIds([1,2,3]);
     await database.dispose();
@@ -78,4 +79,24 @@ void main() {
     while (!(await database.buildNameIndexChunk(limit: 9)).ready) {}
     expect(await database.count(const SearchFilters(query: '000', searchType: 'national')), 40);
   });
+  test('failed batch rolls back checkpoint and preserves committed records', () async {
+    final file = await database.beginFile(bank: 'آزمایشی', fingerprint: 'synthetic');
+    final row = <String,Object?>{'file_id':file,'bank':'آزمایشی','part':'',
+      'row_number':1,'normalized_name':'نمونه'};
+    await database.insertBatch(file,[row],csvRecord:2);
+    await expectLater(database.insertBatch(file,[{...row,'file_id':-1}],csvRecord:3), throwsA(isA<DatabaseException>()));
+    expect(await database.totalRecords(),1);
+    expect((await database.importCheckpoint('synthetic'))!['csv_record'],2);
+  });
+  test('closed WAL backup is self-contained and validated', () async {
+    await (await database.db).rawQuery('PRAGMA journal_mode=WAL');
+    await seed(count:13);
+    final copy = '${temp.path}/backup.sqlite';
+    await database.withDatabaseClosed((filename) async { await File(filename).copy(copy); });
+    await database.validateDatabaseFile(copy);
+    final restored = UserInfoDatabase(databasePath:copy);
+    try { expect(await restored.totalRecords(),13); }
+    finally { await restored.dispose(); }
+  });
+
 }

@@ -21,7 +21,12 @@ def run(n):
             db.commit()
         insert=time.perf_counter()-t
         t=time.perf_counter(); db.execute('INSERT INTO fts(docid,normalized_name) SELECT id,normalized_name FROM records'); db.commit(); backfill=time.perf_counter()-t
+        db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        before_bytes=os.path.getsize(os.path.join(directory,'synthetic.sqlite'))
+        db.executescript('CREATE TABLE record_identifiers(record_id INTEGER PRIMARY KEY,mobile TEXT,national TEXT); CREATE INDEX idx_ident_mobile ON record_identifiers(mobile,record_id); CREATE INDEX idx_ident_national ON record_identifiers(national,record_id);')
+        db.execute("INSERT INTO record_identifiers SELECT id,mobile,'0000000000' FROM records");db.commit()
         queries={
+          'derived_identifier_range':("SELECT r.* FROM record_identifiers ids CROSS JOIN records r ON r.id=ids.record_id WHERE ids.mobile>=? AND ids.mobile<? ORDER BY r.id DESC LIMIT 20",('09000000100','09000000101')),
           'old_mobile_like':("SELECT * FROM records WHERE mobile LIKE ? ORDER BY id DESC LIMIT 20",('09000000100%',)),
           'mobile_range':("SELECT * FROM records WHERE mobile>=? AND mobile<? ORDER BY id DESC LIMIT 20",('09000000100','09000000101')),
           'old_name_fallback':("SELECT * FROM records WHERE normalized_name LIKE ? ORDER BY id DESC LIMIT 20",('%نامناموجود%',)),
@@ -35,6 +40,7 @@ def run(n):
         for key,(sql,args) in queries.items():
             result['queries'][key]={**timed(lambda:db.execute(sql,args).fetchall()),'plan':db.execute('EXPLAIN QUERY PLAN '+sql,args).fetchall()}
         db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        result['before_identifier_table_bytes']=before_bytes
         result['database_bytes']=os.path.getsize(os.path.join(directory,'synthetic.sqlite'))
         result['objects_bytes']=db.execute('SELECT name,SUM(pgsize) FROM dbstat GROUP BY name').fetchall()
         return result
