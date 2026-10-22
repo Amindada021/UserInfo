@@ -63,7 +63,7 @@ class _HomePageState extends State<HomePage> {
   final CsvSource _source = CsvSource();
   final TextEditingController _search = TextEditingController();
   late final ImportController _import = ImportController(_database, _source);
-  late final ExportService _export = ExportService(_source);
+  late final ExportService _export = ExportService();
 
   List<Map<String, Object?>> _rows = const [];
   final Set<int> _selected = {};

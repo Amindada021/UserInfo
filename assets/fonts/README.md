@@ -1,0 +1,1 @@
+Lateef (SIL Open Font License 1.1) is fetched from the public google/fonts repository at build/bootstrap time and bundled only into the APK. No customer data or fonts are published as direct repository downloads. The OFL license is bundled at assets/fonts/OFL.txt in the build environment.

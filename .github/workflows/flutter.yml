@@ -36,6 +36,15 @@ jobs:
           mkdir -p android/app/src/main/kotlin/com/amindada021/userinfo
           cp platform_templates/MainActivity.kt android/app/src/main/kotlin/com/amindada021/userinfo/MainActivity.kt
 
+      - name: Bundle Persian PDF font and OFL license
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets/fonts
+          curl -fL --retry 3 -o assets/fonts/Lateef-Regular.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/lateef/Lateef-Regular.ttf
+          curl -fL --retry 3 -o assets/fonts/OFL.txt https://raw.githubusercontent.com/google/fonts/main/ofl/lateef/OFL.txt
+          test "$(wc -c < assets/fonts/Lateef-Regular.ttf)" -gt 100000
+
       - name: Resolve dependencies
         run: flutter pub get
 
