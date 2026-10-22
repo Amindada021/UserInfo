@@ -611,7 +611,9 @@ class _HomePageState extends State<HomePage> {
     }
     if (restoreError != null && mounted) {
       if (restoreError is PlatformException &&
-          restoreError.code == 'CANCELLED') return;
+          restoreError.code == 'CANCELLED') {
+        return;
+      }
       final stage = switch (failedStage) {
         RestoreStage.selecting => 'انتخاب و آماده‌سازی فایل',
         RestoreStage.copying => 'کپی بکاپ به حافظه برنامه',
