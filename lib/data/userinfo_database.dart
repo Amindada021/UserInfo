@@ -5,6 +5,7 @@ import '../core/text_normalizer.dart';
 class SearchFilters {
   const SearchFilters({
     this.query = '',
+    this.searchType = 'name',
     this.bank = '',
     this.fields = const {},
     this.missingMobile = false,
@@ -12,6 +13,7 @@ class SearchFilters {
     this.birthTo = '',
   });
   final String query;
+  final String searchType;
   final String bank;
   final Map<String, String> fields;
   final bool missingMobile;
@@ -27,7 +29,14 @@ class UserInfoDatabase {
     final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
     return openDatabase(
       location,
-      version: 1,
+      version: 2,
+      onUpgrade: (database, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          // Preserve imported people while irreversibly removing source-file metadata.
+          await database.execute("UPDATE files SET uri = '', name = '', size_bytes = NULL");
+          await database.execute("UPDATE records SET part = ''");
+        }
+      },
       onConfigure: (database) async {
         await database.execute('PRAGMA foreign_keys=ON');
       },
@@ -89,30 +98,16 @@ class UserInfoDatabase {
     });
   }
 
-  Future<bool> alreadyImported(String name, int? size, String bank) async {
-    final database = await db;
-    final rows = await database.query('files',
-        columns: ['id'],
-        where: size == null
-            ? 'name = ? AND bank = ? AND state = ?'
-            : 'name = ? AND size_bytes = ? AND bank = ? AND state = ?',
-        whereArgs: size == null
-            ? [name, bank, 'complete']
-            : [name, size, bank, 'complete'],
-        limit: 1);
-    return rows.isNotEmpty;
-  }
-
-  Future<int> beginFile({
-    required String uri,
-    required String name,
-    required String bank,
-    int? size,
-  }) async {
+  // File rows are anonymous internal import transactions. The device never
+  // persists the URI, filename, part or file size.
+  Future<int> beginFile({required String bank}) async {
     final database = await db;
     return database.insert('files', {
-      'uri': uri, 'name': name, 'bank': bank,
-      'size_bytes': size, 'state': 'importing',
+      'uri': '',
+      'name': '',
+      'bank': bank,
+      'size_bytes': null,
+      'state': 'importing',
       'created_at': DateTime.now().toIso8601String(),
     });
   }
@@ -152,6 +147,11 @@ class UserInfoDatabase {
     'birth_city', 'birth_province', 'address', 'card_no', 'mobile',
   ];
 
+  static String _escapeLike(String input) => input
+      .replaceAll('!', '!!')
+      .replaceAll('%', '!%')
+      .replaceAll('_', '!_');
+
   (String, List<Object?>) _where(SearchFilters filters) {
     final conditions = <String>[];
     final args = <Object?>[];
@@ -159,31 +159,43 @@ class UserInfoDatabase {
       conditions.add('r.bank = ?');
       args.add(filters.bank);
     }
-    if (filters.query.trim().isNotEmpty) {
-      conditions.add('r.normalized_name LIKE ?');
-      args.add('${TextNormalizer.normalize(filters.query)}%');
+    final query = TextNormalizer.normalize(filters.query);
+    if (query.isNotEmpty) {
+      if (filters.searchType == 'mobile' || filters.searchType == 'national') {
+        // Normalized search digits, raw identifying values remain unchanged.
+        final column = filters.searchType == 'mobile'
+            ? 'mobile' : 'national_code';
+        conditions.add('r.$column LIKE ? ESCAPE \'!\'');
+        args.add('${_escapeLike(query)}%');
+      } else {
+        // Match name or surname anywhere, regardless of word order.
+        for (final word in query.split(' ').where((v) => v.isNotEmpty)) {
+          conditions.add("r.normalized_name LIKE ? ESCAPE '!'");
+          args.add('%${_escapeLike(word)}%');
+        }
+      }
     }
     for (final entry in filters.fields.entries) {
-      if (!(allowedFields.contains(entry.key) || entry.key == 'part') || entry.value.trim().isEmpty) {
+      if (!allowedFields.contains(entry.key) || entry.value.trim().isEmpty) {
         continue;
       }
       final value = TextNormalizer.normalize(entry.value);
       if (entry.key == 'full_name') {
-        conditions.add('r.normalized_name LIKE ?');
-        args.add('$value%');
+        conditions.add("r.normalized_name LIKE ? ESCAPE '!'");
+        args.add('%${_escapeLike(value)}%');
       } else if (entry.key == 'father_name') {
-        conditions.add('r.normalized_father LIKE ?');
-        args.add('$value%');
+        conditions.add("r.normalized_father LIKE ? ESCAPE '!'");
+        args.add('%${_escapeLike(value)}%');
       } else if (entry.key == 'city_name') {
-        conditions.add('r.normalized_city LIKE ?');
-        args.add('$value%');
+        conditions.add("r.normalized_city LIKE ? ESCAPE '!'");
+        args.add('%${_escapeLike(value)}%');
       } else if (entry.key == 'province_name') {
-        conditions.add('r.normalized_province LIKE ?');
-        args.add('$value%');
+        conditions.add("r.normalized_province LIKE ? ESCAPE '!'");
+        args.add('%${_escapeLike(value)}%');
       } else {
         // Identifier searches are exact/prefix. Other text uses a prefix scan.
-        conditions.add('r.${entry.key} LIKE ?');
-        args.add('${entry.value.trim()}%');
+        conditions.add("r.${entry.key} LIKE ? ESCAPE '!'");
+        args.add('${_escapeLike(value)}%');
       }
     }
     if (filters.missingMobile) {

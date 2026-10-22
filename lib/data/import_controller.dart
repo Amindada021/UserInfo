@@ -83,9 +83,6 @@ class ImportController extends ChangeNotifier {
     if (!doc.name.toLowerCase().endsWith('.csv')) {
       throw FormatException('فایل CSV نیست: ${doc.name}');
     }
-    if (await database.alreadyImported(doc.name, doc.size, doc.bank)) {
-      throw StateError('فایل قبلاً با همین نام و اندازه ایمپورت شده: ${doc.name}');
-    }
     var fileId = 0;
     var rowNumber = 0;
     try {
@@ -115,11 +112,7 @@ class ImportController extends ChangeNotifier {
             throw FormatException('ساختار CSV ناشناخته است: ${doc.name}');
           }
           // Actual bank is derived from the validated header, not filename.
-          if (await database.alreadyImported(doc.name, doc.size, bank)) {
-            throw StateError('این فایل قبلاً وارد شده: ${doc.name}');
-          }
-          fileId = await database.beginFile(
-              uri: doc.uri, name: doc.name, bank: bank, size: doc.size);
+          fileId = await database.beginFile(bank: bank);
           continue;
         }
         rowNumber++;
@@ -135,7 +128,7 @@ class ImportController extends ChangeNotifier {
         buffer.add({
           'file_id': fileId,
           'bank': bank,
-          'part': doc.name,
+          'part': '',
           'row_number': rowNumber,
           for (final field in UserInfoDatabase.allowedFields)
             field: values[field.toUpperCase()],
