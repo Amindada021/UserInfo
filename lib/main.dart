@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:share_plus/share_plus.dart';
 
@@ -826,13 +825,14 @@ class _HomePageState extends State<HomePage> {
     final visible = _showFullDetails;
     final alternate = index.isOdd;
     final selected = _selected.contains(id);
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Card(
       key: ValueKey(id),
       color: selected
-          ? const Color(0xFFD9EEE5)
+          ? (dark ? const Color(0xFF194D40) : const Color(0xFFD9EEE5))
           : alternate
-              ? const Color(0xFFE8F2F7)
-              : Colors.white,
+              ? (dark ? const Color(0xFF23353F) : const Color(0xFFE8F2F7))
+              : (dark ? const Color(0xFF202B2B) : Colors.white),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
@@ -840,8 +840,9 @@ class _HomePageState extends State<HomePage> {
           color: selected
               ? const Color(0xFF78B69D)
               : alternate
-                  ? const Color(0xFFBED9E8)
-                  : const Color(0xFFDCE7E2),
+                  ? const Color(0xFF537282)
+                  : (dark ? const Color(0xFF3C4F4A)
+                      : const Color(0xFFDCE7E2)),
         ),
       ),
       child: ExpansionTile(
@@ -863,6 +864,27 @@ class _HomePageState extends State<HomePage> {
         subtitle: Row(children: [
           Text('بانک ${row['bank']}', style: const TextStyle(fontSize: 12)),
           const Spacer(),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            tooltip: 'علاقه‌مندی',
+            icon: Icon((row['is_favorite'] as num? ?? 0) == 1
+                ? Icons.star_rounded : Icons.star_border_rounded,
+                color: (row['is_favorite'] as num? ?? 0) == 1
+                    ? Colors.amber.shade700 : null, size: 21),
+            onPressed: () => _toggleFavorite(row),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            tooltip: 'ویرایش رکورد',
+            icon: const Icon(Icons.edit_outlined, size: 19),
+            onPressed: () => _editPerson(row),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            tooltip: 'اشتراک‌گذاری',
+            icon: const Icon(Icons.share_outlined, size: 19),
+            onPressed: () => _sharePerson(row),
+          ),
           IconButton(
             visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.copy_all_outlined, size: 19),
@@ -1001,13 +1023,26 @@ class _HomePageState extends State<HomePage> {
             tooltip: 'تنظیمات',
             onPressed: _openSettings,
           ),
+          IconButton(
+            tooltip: _favoritesOnly ? 'نمایش همه' : 'فقط علاقه‌مندی‌ها',
+            icon: Icon(_favoritesOnly
+                ? Icons.star_rounded : Icons.star_border_rounded),
+            onPressed: () {
+              setState(() => _favoritesOnly = !_favoritesOnly);
+              _load(resetPage: true);
+            },
+          ),
           PopupMenuButton<String>(
             onSelected: (item) {
               if (item == 'export') _showExportOptions();
               if (item == 'delete') _deleteEverything();
+              if (item == 'backup') _backupDatabase();
+              if (item == 'restore') _restoreDatabase();
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'export', child: Text('خروجی PDF / Excel')),
+              PopupMenuItem(value: 'backup', child: Text('بکاپ کامل SQLite')),
+              PopupMenuItem(value: 'restore', child: Text('بازیابی دیتابیس')),
               PopupMenuItem(value: 'delete', child: Text('حذف همه اطلاعات')),
             ],
           ),
@@ -1062,6 +1097,39 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
             ),
+            if (_indexStatus != null && !_indexStatus!.ready)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('در حال ساخت ایندکس جستجوی نام: '
+                          '${(_indexStatus!.fraction * 100).toStringAsFixed(1)}٪',
+                          style: const TextStyle(fontSize: 12)),
+                      const SizedBox(height: 5),
+                      LinearProgressIndicator(value: _indexStatus!.fraction),
+                      const Text(
+                        'رکوردهای قبلی حذف نمی‌شوند. تا پایان ایندکس، '
+                        'جستجوی نام ممکن است کند باشد.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_indexError != null)
+              ListTile(
+                leading: const Icon(Icons.warning_amber_rounded),
+                title: const Text('خطا در ساخت ایندکس'),
+                subtitle: Text(_indexError!),
+                trailing: TextButton(
+                  onPressed: _buildNameIndex,
+                  child: const Text('تلاش مجدد'),
+                ),
+              ),
+            if (_maintenanceBusy)
+              const LinearProgressIndicator(),
             if (_showImportSummary) _progressPanel(),
             if (_partialRecords > 0)
               Padding(
@@ -1080,6 +1148,11 @@ class _HomePageState extends State<HomePage> {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text('${_selected.length} انتخاب‌شده'),
+                      TextButton.icon(
+                        onPressed: _shareSelection,
+                        icon: const Icon(Icons.share_outlined, size: 18),
+                        label: const Text('اشتراک‌گذاری'),
+                      ),
                       TextButton.icon(
                         onPressed: _copySelection,
                         icon: const Icon(Icons.copy, size: 18),
