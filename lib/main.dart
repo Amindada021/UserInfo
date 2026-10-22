@@ -243,7 +243,7 @@ class _HomePageState extends State<HomePage> {
       showDragHandle: true,
       builder: (sheetContext) {
         var selectedOnly = _selected.isNotEmpty;
-        var sensitive = false;
+        const sensitive = true;
         var pdf = false;
         return StatefulBuilder(builder: (context, update) {
           return SafeArea(
@@ -259,11 +259,10 @@ class _HomePageState extends State<HomePage> {
                   onChanged: _selected.isEmpty
                       ? null : (v) => update(() => selectedOnly = v),
                 ),
-                SwitchListTile(
-                  title: const Text('شامل اطلاعات حساس'),
-                  subtitle: const Text('در حالت عادی فقط نام و بانک'),
-                  value: sensitive,
-                  onChanged: (v) => update(() => sensitive = v),
+                const ListTile(
+                  leading: Icon(Icons.fact_check_outlined),
+                  title: Text('خروجی کامل همه فیلدهای موجود'),
+                  subtitle: Text('هر دو فرمت شامل تمام ۱۴ ستون هستند'),
                 ),
                 SegmentedButton<bool>(
                   segments: const [
