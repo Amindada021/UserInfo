@@ -88,7 +88,7 @@ void main() {
 
       final sql = await receiver.db;
       final version = await sql.rawQuery('PRAGMA user_version');
-      expect(version.single.values.single, 7);
+      expect(version.single.values.single, 8);
       final checkpoints = await sql.rawQuery(
           "SELECT name FROM sqlite_master WHERE name = 'import_checkpoints'");
       expect(checkpoints, isNotEmpty);

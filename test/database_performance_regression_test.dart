@@ -26,6 +26,36 @@ void main() {
     }));
     return file;
   }
+  test('fresh database keeps only indexes needed before manual indexing',
+      () async {
+    final handle = await database.db;
+    final indexes = await handle.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='records'");
+    final names = indexes.map((row) => row['name']).toSet();
+    for (final name in [
+      'idx_records_name', 'idx_records_mobile', 'idx_records_national',
+    ]) {
+      expect(names.contains(name), isFalse);
+    }
+    for (final name in ['idx_records_file_id', 'idx_records_bank_id',
+        'idx_records_card']) {
+      expect(names.contains(name), isTrue);
+    }
+    await database.beginFastImport();
+    await seed(count: 40);
+    await database.finishFastImport();
+    expect(await database.totalRecords(), 40);
+    var index = await database.nameIndexStatus();
+    while (!index.ready) {
+      index = await database.buildNameIndexChunk(limit: 20);
+    }
+    expect(await database.count(const SearchFilters(query: 'حسی')), 40);
+    expect(await database.count(const SearchFilters(
+        query: '0912', searchType: 'mobile')), 40);
+    expect(await database.count(const SearchFilters(
+        query: '000', searchType: 'national')), 40);
+  });
+
   test('prefix AND terms, original identifiers, keyset, edits and favorites', () async {
     await seed();
     for (final q in ['محمدرضا','حسینی','نژاد','محمدرضا حسینی','حسینی محمدرضا','حسی']) {
@@ -60,6 +90,34 @@ void main() {
     expect(await database.count(const SearchFilters(query: '0912', searchType: 'mobile')), 40);
     expect((await (await database.db).rawQuery('PRAGMA integrity_check')).first.values.first, 'ok');
   });
+  test('v7 migration drops only duplicate indexes, never imported people',
+      () async {
+    await seed(count: 50);
+    await database.toggleFavorite(1);
+    final handle = await database.db;
+    await handle.execute(
+        'CREATE INDEX idx_records_name ON records(normalized_name COLLATE NOCASE, id)');
+    await handle.execute(
+        'CREATE INDEX idx_records_national ON records(national_code)');
+    await handle.execute(
+        'CREATE INDEX idx_records_mobile ON records(mobile)');
+    await handle.setVersion(7);
+    await database.dispose();
+    database = UserInfoDatabase();
+    expect(await database.totalRecords(), 50);
+    expect(await database.count(
+        const SearchFilters(favoritesOnly: true)), 1);
+    final names = await (await database.db).rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='records'");
+    final namesSet = names.map((row) => row['name']).toSet();
+    expect(namesSet.contains('idx_records_name'), isFalse);
+    expect(namesSet.contains('idx_records_national'), isFalse);
+    expect(namesSet.contains('idx_records_mobile'), isFalse);
+    expect((await (await database.db).rawQuery('PRAGMA integrity_check'))
+        .first.values.first, 'ok');
+    expect(await database.count(const SearchFilters(query: 'حسی')), 50);
+  });
+
   test('v5 migration preserves originals, favorites and partial files', () async {
     await seed();
     await database.toggleFavorite(1);

@@ -59,7 +59,7 @@ class UserInfoDatabase {
     final location = databasePath ?? path.join(await getDatabasesPath(), 'userinfo.sqlite');
     final database = await openDatabase(
       location,
-      version: 7,
+      version: 8,
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // Preserve imported people while irreversibly removing source-file metadata.
@@ -81,6 +81,12 @@ class UserInfoDatabase {
         }
         if (oldVersion < 5) {
           await _enableBulkIndexMode(database);
+        }
+        if (oldVersion < 8) {
+          // Name, mobile and national_code queries now use the manually
+          // populated FTS4/record_identifiers indexes. These three legacy
+          // B-trees are redundant, and were still updated on every CSV row.
+          await _dropRedundantInsertIndexes(database);
         }
       },
       onConfigure: (database) async {
@@ -117,17 +123,13 @@ class UserInfoDatabase {
           )
         ''');
         await database.execute(
-            'CREATE INDEX idx_records_name ON records(normalized_name COLLATE NOCASE, id)');
-        await database.execute(
             'CREATE INDEX idx_records_bank_id ON records(bank, id)');
         await database.execute(
             'CREATE INDEX idx_records_file_id ON records(file_id, id)');
-        await database.execute(
-            'CREATE INDEX idx_records_national ON records(national_code)');
+        // Preserve card-prefix lookups; name and national/mobile indexes are
+        // created only in their specialized FTS/identifier tables on demand.
         await database.execute(
             'CREATE INDEX idx_records_card ON records(card_no)');
-        await database.execute(
-            'CREATE INDEX idx_records_mobile ON records(mobile)');
         await database.execute('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
         await _setupNameIndex(database, existingRecords: false);
         await _setupFavorites(database);
@@ -156,6 +158,19 @@ class UserInfoDatabase {
     }
     _nameIndexReady = (await _readNameIndexStatus(database)).ready;
     return database;
+  }
+
+  /// No record is deleted: only redundant legacy index pages are freed.
+  /// The indexed search paths use FTS4 and record_identifiers instead.
+  /// Keep bank/file/card indexes for existing filtering and deletes.
+  Future<void> _dropRedundantInsertIndexes(DatabaseExecutor executor) async {
+    for (final name in [
+      'idx_records_name',
+      'idx_records_mobile',
+      'idx_records_national',
+    ]) {
+      await executor.execute('DROP INDEX IF EXISTS $name');
+    }
   }
 
   /// Derived normalized names are still personal data. Neither this index
