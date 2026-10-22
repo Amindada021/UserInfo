@@ -102,16 +102,27 @@ class UserInfoDatabase {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// A crashed or interrupted import retains all committed batches.
+  /// Import state becomes partial so a later attempt cannot silently delete
+  /// 1.8 million successfully saved people.
   Future<void> discardInterruptedImports() async {
     final database = await db;
-    await database.transaction((tx) async {
-      final partial = await tx.query('files',
-          columns: ['id'], where: 'state != ?', whereArgs: ['complete']);
-      for (final file in partial) {
-        await tx.delete('records', where: 'file_id = ?', whereArgs: [file['id']]);
-        await tx.delete('files', where: 'id = ?', whereArgs: [file['id']]);
-      }
-    });
+    await database.update('files', {'state': 'partial'},
+        where: 'state = ?', whereArgs: ['importing']);
+  }
+
+  Future<void> markPartial(int fileId) async {
+    final database = await db;
+    await database.update('files', {'state': 'partial'},
+        where: 'id = ?', whereArgs: [fileId]);
+  }
+
+  Future<int> partialRecordCount() async {
+    final database = await db;
+    final results = await database.rawQuery(
+        'SELECT COALESCE(SUM(imported_count), 0) AS total FROM files WHERE state = ?',
+        ['partial']);
+    return (results.first['total'] as num).toInt();
   }
 
   // File rows are anonymous internal import transactions. The device never
