@@ -35,6 +35,7 @@ class UserInfoDatabase {
           // Preserve imported people while irreversibly removing source-file metadata.
           await database.execute("UPDATE files SET uri = '', name = '', size_bytes = NULL");
           await database.execute("UPDATE records SET part = ''");
+          await database.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
         }
       },
       onConfigure: (database) async {
@@ -82,8 +83,23 @@ class UserInfoDatabase {
             'CREATE INDEX idx_records_card ON records(card_no)');
         await database.execute(
             'CREATE INDEX idx_records_mobile ON records(mobile)');
+        await database.execute('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
       },
     );
+  }
+
+  Future<bool> showFullDetails() async {
+    final database = await db;
+    final rows = await database.query('app_settings', columns: ['value'],
+        where: 'key = ?', whereArgs: ['show_full_details'], limit: 1);
+    return rows.isNotEmpty && rows.first['value'] == 'true';
+  }
+
+  Future<void> setShowFullDetails(bool value) async {
+    final database = await db;
+    await database.insert('app_settings',
+        {'key': 'show_full_details', 'value': value.toString()},
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> discardInterruptedImports() async {
