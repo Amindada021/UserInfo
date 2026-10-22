@@ -61,6 +61,16 @@ class CsvSource {
   Future<void> closeImportLog() async =>
       _channel.invokeMethod<void>('closeImportLog');
 
+  /// Android Storage Access Framework streams data directly between SQLite
+  /// and the user-selected destination, without materializing it in Dart RAM.
+  Future<int> exportDatabase(String sqlitePath) async =>
+      (await _channel.invokeMethod<int>(
+          'exportDatabase', {'path': sqlitePath})) ?? 0;
+
+  Future<int> importDatabase(String stagingPath) async =>
+      (await _channel.invokeMethod<int>(
+          'importDatabase', {'path': stagingPath})) ?? 0;
+
   Future<void> close() async => _channel.invokeMethod<void>('close');
 
   Future<Uint8List?> pdfFont() async =>
