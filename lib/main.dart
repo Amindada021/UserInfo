@@ -160,7 +160,8 @@ class _HomePageState extends State<HomePage> {
       _batchRows = configuredBatch == null
           ? ImportController.defaultBatchRows
           : configuredBatch.clamp(
-              ImportController.minBatchRows, ImportController.maxBatchRows);
+              ImportController.minBatchRows, ImportController.maxBatchRows)
+              .toInt();
       final savedTheme = await _database.getSetting('theme_mode');
       AppAppearance.mode.value =
           savedTheme == 'dark' ? ThemeMode.dark : ThemeMode.light;

@@ -112,7 +112,7 @@ class ImportController extends ChangeNotifier {
             fallback: '$defaultBatchRows'));
     batchRows = configured == null
         ? defaultBatchRows
-        : configured.clamp(minBatchRows, maxBatchRows);
+        : configured.clamp(minBatchRows, maxBatchRows).toInt();
     busy = true;
     PerformanceMetrics.reset();
     final importWatch = Stopwatch()..start();
@@ -393,7 +393,8 @@ class ImportController extends ChangeNotifier {
         // Requested batch size is a TARGET; the memory guard may flush
         // earlier on long strings or memory pressure. Committed rows and
         // the CSV checkpoint are always in the same SQLite transaction.
-        final memoryPressure = buffer.length % 1024 == 0 &&
+        final memoryPressure = batchRows > 5000 &&
+            buffer.length % 1024 == 0 &&
             ProcessInfo.currentRss >= rssSafetyLimit;
         if (buffer.length >= batchRows ||
             bufferedCharacters >= maxBufferedCharacters ||
