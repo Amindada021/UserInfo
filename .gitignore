@@ -1,0 +1,30 @@
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins*
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+.idea/
+*.iml
+android/local.properties
+android/key.properties
+android/.gradle/
+# Sensitive private data: never commit customer datasets, databases or exports
+*.csv
+*.tsv
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.xlsx
+*.xls
+*.pdf
+*.zip
+samples-*/
+*.keystore
+*.jks
+.env
+.DS_Store
