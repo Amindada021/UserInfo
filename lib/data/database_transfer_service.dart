@@ -25,11 +25,10 @@ class DatabaseTransferService {
   Future<int> restoreDatabase({
     void Function(RestoreProgress)? onProgress,
   }) async {
-    StreamSubscription<Map<dynamic, dynamic>>? subscription;
-    // Listen before launching Android's picker: the first 0-byte event is
-    // delivered when the user selects a document.
-    subscription = source.restoreCopyProgress.listen((event) {
-      onProgress?.call(RestoreProgress.fromNative(event));
+    RestoreProgress? lastCopy;
+    final subscription = source.restoreCopyProgress.listen((event) {
+      lastCopy = RestoreProgress.fromNative(event);
+      onProgress?.call(lastCopy!);
     });
     try {
       onProgress?.call(const RestoreProgress(stage: RestoreStage.selecting));
@@ -39,15 +38,7 @@ class DatabaseTransferService {
         final incoming = File(incomingPath);
         final previous = File(previousPath);
         if (await incoming.exists()) await incoming.delete();
-        RestoreProgress? lastCopy;
         try {
-          // Record total copy bytes for the checking/replacing stages.
-          await subscription?.cancel();
-          subscription = source.restoreCopyProgress.listen((event) {
-            final status = RestoreProgress.fromNative(event);
-            lastCopy = status;
-            onProgress?.call(status);
-          });
           final bytes = await source.importDatabase(incomingPath);
           if (bytes <= 0) {
             throw const FormatException('فایل دیتابیس خالی است');

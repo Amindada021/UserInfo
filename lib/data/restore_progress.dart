@@ -27,7 +27,7 @@ class RestoreProgress {
 
   double? get copyFraction =>
       stage == RestoreStage.copying && totalBytes != null && totalBytes! > 0
-          ? (copiedBytes / totalBytes!).clamp(0.0, 1.0)
+          ? (copiedBytes / totalBytes!).clamp(0.0, 1.0).toDouble()
           : null;
 
   double? get bytesPerSecond =>
