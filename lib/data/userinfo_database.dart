@@ -21,21 +21,34 @@ class SearchFilters {
   final String birthTo;
 }
 
+class NameIndexStatus {
+  const NameIndexStatus({required this.done, required this.target});
+  final int done;
+  final int target;
+  bool get ready => done >= target;
+  double get fraction => target == 0 ? 1 : (done / target).clamp(0, 1);
+}
+
 class UserInfoDatabase {
   Database? _db;
+  bool _nameIndexReady = false;
+  bool _nameIndexBuildRunning = false;
   Future<Database> get db async => _db ??= await _open();
 
   Future<Database> _open() async {
     final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
-    return openDatabase(
+    final database = await openDatabase(
       location,
-      version: 2,
+      version: 3,
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // Preserve imported people while irreversibly removing source-file metadata.
           await database.execute("UPDATE files SET uri = '', name = '', size_bytes = NULL");
           await database.execute("UPDATE records SET part = ''");
           await database.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+        }
+        if (oldVersion < 3) {
+          await _setupNameIndex(database, existingRecords: true);
         }
       },
       onConfigure: (database) async {
@@ -84,8 +97,117 @@ class UserInfoDatabase {
         await database.execute(
             'CREATE INDEX idx_records_mobile ON records(mobile)');
         await database.execute('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+        await _setupNameIndex(database, existingRecords: false);
       },
     );
+    _nameIndexReady = (await _readNameIndexStatus(database)).ready;
+    return database;
+  }
+
+  /// Indexed names are derived from normalized_name; no original identities
+  /// or personal banking fields are copied into the FTS4 index.
+  Future<void> _setupNameIndex(DatabaseExecutor executor,
+      {required bool existingRecords}) async {
+    await executor.execute(
+      'CREATE VIRTUAL TABLE IF NOT EXISTS record_name_fts '
+      'USING fts4(normalized_name, tokenize=unicode61, order=DESC)');
+    await executor.execute(
+      'CREATE TRIGGER IF NOT EXISTS record_name_fts_insert '
+      'AFTER INSERT ON records BEGIN '
+      'INSERT INTO record_name_fts(docid, normalized_name) '
+      'VALUES (new.id, new.normalized_name); END');
+    await executor.execute(
+      'CREATE TRIGGER IF NOT EXISTS record_name_fts_delete '
+      'BEFORE DELETE ON records BEGIN '
+      'DELETE FROM record_name_fts WHERE docid = old.id; END');
+    await executor.execute(
+      'CREATE TRIGGER IF NOT EXISTS record_name_fts_update '
+      'AFTER UPDATE OF normalized_name ON records BEGIN '
+      'DELETE FROM record_name_fts WHERE docid = old.id; '
+      'INSERT INTO record_name_fts(docid, normalized_name) '
+      'VALUES (new.id, new.normalized_name); END');
+    final highWaterMark = existingRecords
+        ? (Sqflite.firstIntValue(await executor.rawQuery(
+            'SELECT COALESCE(MAX(id), 0) FROM records')) ?? 0)
+        : 0;
+    await executor.insert('app_settings',
+        {'key': 'name_index_target', 'value': highWaterMark.toString()},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await executor.insert('app_settings',
+        {'key': 'name_index_cursor', 'value': '0'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<NameIndexStatus> _readNameIndexStatus(
+      DatabaseExecutor executor) async {
+    final settings = await executor.query('app_settings',
+        columns: ['key', 'value'],
+        where: 'key IN (?, ?)',
+        whereArgs: ['name_index_target', 'name_index_cursor']);
+    final map = {
+      for (final setting in settings)
+        setting['key'] as String: setting['value'].toString()
+    };
+    final target = int.tryParse(map['name_index_target'] ?? '') ?? 0;
+    final done = int.tryParse(map['name_index_cursor'] ?? '') ?? 0;
+    return NameIndexStatus(done: done, target: target);
+  }
+
+  Future<NameIndexStatus> nameIndexStatus() async =>
+      _readNameIndexStatus(await db);
+
+  /// Commits FTS inserts and cursor together, preserving crash recovery.
+  /// Triggers index all new imports immediately, outside the old-data window.
+  Future<NameIndexStatus> buildNameIndexChunk({int limit = 1200}) async {
+    if (limit < 1 || limit > 5000) {
+      throw ArgumentError.value(limit, 'limit', 'must be 1..5000');
+    }
+    final database = await db;
+    if (_nameIndexReady || _nameIndexBuildRunning) {
+      return _readNameIndexStatus(database);
+    }
+    _nameIndexBuildRunning = true;
+    try {
+      final status = await database.transaction((tx) async {
+        final current = await _readNameIndexStatus(tx);
+        if (current.ready) return current;
+        final rows = await tx.rawQuery(
+          'SELECT id, normalized_name FROM records '
+          'WHERE id > ? AND id <= ? ORDER BY id LIMIT ?',
+          [current.done, current.target, limit],
+        );
+        final batch = tx.batch();
+        for (final row in rows) {
+          batch.rawInsert(
+            'INSERT OR REPLACE INTO record_name_fts(docid, normalized_name) '
+            'VALUES (?, ?)',
+            [row['id'], row['normalized_name']],
+          );
+        }
+        await batch.commit(noResult: true);
+        final next = rows.length < limit
+            ? current.target
+            : rows.last['id'] as int;
+        await tx.insert('app_settings',
+          {'key': 'name_index_cursor', 'value': next.toString()},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+        return NameIndexStatus(done: next, target: current.target);
+      });
+      if (status.ready) _nameIndexReady = true;
+      return status;
+    } finally {
+      _nameIndexBuildRunning = false;
+    }
+  }
+
+  /// For FTS4 the wildcard belongs inside each quoted term.
+  /// Every term can match a prefix anywhere within a complete name.
+  static String nameFtsQuery(String input) {
+    final normalized = TextNormalizer.normalize(input);
+    final tokens = normalized.split(
+        RegExp(r'[^a-z0-9\u0621-\u06FF]+'))
+        .where((token) => token.isNotEmpty);
+    return tokens.map((token) => '"' + token + '*"').join(' ');
   }
 
   Future<bool> showFullDetails() async {
@@ -188,7 +310,12 @@ class UserInfoDatabase {
     }
     final query = TextNormalizer.normalize(filters.query);
     if (query.isNotEmpty) {
-      if (filters.searchType == 'mobile' || filters.searchType == 'national') {
+      if (filters.searchType == 'name' && _nameIndexReady &&
+          nameFtsQuery(query).isNotEmpty) {
+        conditions.add('record_name_fts MATCH ?');
+        args.add(nameFtsQuery(query));
+      } else if (filters.searchType == 'mobile' ||
+          filters.searchType == 'national') {
         // Normalized search digits, raw identifying values remain unchanged.
         final column = filters.searchType == 'mobile'
             ? 'mobile' : 'national_code';
@@ -240,11 +367,22 @@ class UserInfoDatabase {
     return (conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}', args);
   }
 
+  String _from(SearchFilters filters) {
+    if (filters.searchType == 'name' &&
+        filters.query.trim().isNotEmpty &&
+        _nameIndexReady &&
+        nameFtsQuery(filters.query).isNotEmpty) {
+      return 'records r JOIN record_name_fts ON '
+          'record_name_fts.docid = r.id';
+    }
+    return 'records r';
+  }
+
   Future<int> count(SearchFilters filters) async {
     final database = await db;
     final (where, args) = _where(filters);
     final result = await database.rawQuery(
-        'SELECT COUNT(*) AS count FROM records r $where', args);
+        'SELECT COUNT(*) AS count FROM ${_from(filters)} $where', args);
     return (result.first['count'] as num).toInt();
   }
 
@@ -253,7 +391,7 @@ class UserInfoDatabase {
     final database = await db;
     final (where, args) = _where(filters);
     return database.rawQuery('''
-      SELECT r.* FROM records r $where
+      SELECT r.* FROM ${_from(filters)} $where
       ORDER BY r.id DESC
       LIMIT ? OFFSET ?
     ''', [...args, pageSize, page * pageSize]);
@@ -282,9 +420,16 @@ class UserInfoDatabase {
     await database.transaction((tx) async {
       await tx.delete('records');
       await tx.delete('files');
+      await tx.insert('app_settings',
+          {'key': 'name_index_target', 'value': '0'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      await tx.insert('app_settings',
+          {'key': 'name_index_cursor', 'value': '0'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
     });
     // VACUUM reclaims unused pages for the personal device.
     await database.execute('VACUUM');
+    _nameIndexReady = true;
   }
 
   Future<void> dispose() async {
