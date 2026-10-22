@@ -278,8 +278,19 @@ class _HomePageState extends State<HomePage> {
         () => _load(resetPage: true));
   }
 
+  Future<void> _safeKeepScreenOn(bool enabled) async {
+    try {
+      await _source.setKeepScreenOn(enabled);
+    } catch (error) {
+      if (enabled && mounted) {
+        _message('روشن نگه داشتن صفحه فعال نشد: $error');
+      }
+    }
+  }
+
   Future<void> _pickAndImport() async {
     if (_import.busy) return;
+    var keepScreen = false;
     try {
       final documents = await _source.pick();
       if (documents.isEmpty) return;
@@ -296,6 +307,8 @@ class _HomePageState extends State<HomePage> {
         if (proceed != true) return;
       }
       if (mounted) setState(() => _showImportSummary = true);
+      keepScreen = true;
+      await _safeKeepScreenOn(true);
       await _import.importDocuments(documents);
       _partialRecords = await _database.partialRecordCount();
       if (_import.lastError != null) {
@@ -311,6 +324,8 @@ class _HomePageState extends State<HomePage> {
       _buildNameIndex();
     } catch (error) {
       _message('انتخاب فایل ناموفق بود: $error');
+    } finally {
+      if (keepScreen) await _safeKeepScreenOn(false);
     }
   }
 
@@ -516,12 +531,14 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     setState(() => _maintenanceBusy = true);
+    await _safeKeepScreenOn(true);
     try {
       final bytes = await _transfer.exportDatabase();
       _message('بکاپ دیتابیس ذخیره شد: $bytes بایت');
     } catch (error) {
       _message('بکاپ ذخیره نشد یا انتخاب فایل لغو شد: $error');
     } finally {
+      await _safeKeepScreenOn(false);
       if (mounted) {
         setState(() => _maintenanceBusy = false);
         _buildNameIndex();
@@ -563,6 +580,7 @@ class _HomePageState extends State<HomePage> {
       _maintenanceBusy = true;
       _restoreProgress = const RestoreProgress(stage: RestoreStage.selecting);
     });
+    await _safeKeepScreenOn(true);
     try {
       await _transfer.restoreDatabase(onProgress: (progress) {
         if (mounted) setState(() => _restoreProgress = progress);
@@ -575,6 +593,7 @@ class _HomePageState extends State<HomePage> {
     } catch (error) {
       _message('بازیابی انجام نشد: $error');
     } finally {
+      await _safeKeepScreenOn(false);
       _restoreTicker?.cancel();
       _restoreTicker = null;
       _restoreElapsed.stop();

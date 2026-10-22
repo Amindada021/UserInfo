@@ -63,6 +63,18 @@ class MainActivity : FlutterActivity() {
             })
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
+                "setKeepScreenOn" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    // FLAG_KEEP_SCREEN_ON overrides the normal screen timeout
+                    // only while this Activity is visible. It is automatically
+                    // cleared by Android when the Activity is destroyed.
+                    if (enabled) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                    result.success(true)
+                }
                 "exportDatabase" -> {
                     if (pendingDatabaseTransfer != null) {
                         result.error("BUSY", "A database transfer is already open", null)

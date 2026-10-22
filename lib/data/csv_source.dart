@@ -44,6 +44,12 @@ class CsvSource {
 
   /// Keep a foreground Android service active for long-running imports.
   /// This improves screen-off survival but is not a crash/reboot resume system.
+  /// Keep the display awake while a foreground import/backup/restore runs.
+  /// Does not override the power button or the Android lock screen.
+  Future<void> setKeepScreenOn(bool enabled) async =>
+      _channel.invokeMethod<void>(
+          'setKeepScreenOn', {'enabled': enabled});
+
   Future<void> protectImport(bool enabled) async =>
       _channel.invokeMethod<void>('protectImport', {'enabled': enabled});
 
