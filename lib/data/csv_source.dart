@@ -51,6 +51,16 @@ class CsvSource {
         'percent': percent,
       });
 
+  Future<String> openImportLog() async =>
+      await _channel.invokeMethod<String>('openImportLog') ??
+      'Downloads/UserInfo';
+
+  Future<void> appendImportLog(String value) async =>
+      _channel.invokeMethod<void>('appendImportLog', {'text': value});
+
+  Future<void> closeImportLog() async =>
+      _channel.invokeMethod<void>('closeImportLog');
+
   Future<void> close() async => _channel.invokeMethod<void>('close');
 
   Future<Uint8List?> pdfFont() async =>
