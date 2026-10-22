@@ -15,6 +15,17 @@
 - حذف تمام داده‌های داخل اپ فقط با تأیید؛ CSV اصلی حذف نمی‌شود.
 - خروجی PDF و XLSX آزمایشی برای **صفحه فعلی یا انتخاب‌شده‌ها، حداکثر ۱۰۰ رکورد**. PDF از فونت عربی موجود روی دستگاه استفاده می‌کند و روی گوشی‌های فاقد فونت سازگار پیام خطا خواهد داد.
 
+## دانلود مستقیم روی گوشی (GitHub Releases)
+
+- صفحه نسخه‌ها: **https://github.com/Amindada021/UserInfo/releases/latest**
+- دانلود مستقیم نسخه جدید: **https://github.com/Amindada021/UserInfo/releases/latest/download/UserInfo-latest.apk**
+- هر نسخه مثل `v0.1.0` یک فایل `UserInfo-v0.1.0.apk` و فایل `.sha256` دارد.
+- نسخه از `pubspec.yaml` خوانده می‌شود. برای انتشار نسخه بعدی مقدار `version: 0.1.1+2` را تنظیم و روی `main` Push کنید.
+- هر Push روی `main` آنالیز، تست و APK را بیلد می‌کند. **GitHub Release جدید فقط برای نسخه جدید** ساخته می‌شود. اجرای دستی از Actions نیز فعال است.
+- در گوشی صفحه Releases را باز، APK را دانلود و نصب کنید. APK عمومی بدون ورود به گیت‌هاب هم قابل دانلود است.
+
+**امضای APK:** اگر GitHub Secrets برای keystore تنظیم نشده باشد، بیلد آزمایشی با کلید debug موقت Runner امضا می‌شود. در این حالت ممکن است برای نصب نسخه جدید مجبور به حذف نسخه قبلی شوید و داده‌های محلی آن از بین بروند. برای آپدیت قابل‌اعتماد و حفظ دیتابیس، پیش از استفاده واقعی **keystore پایدار** را در GitHub Actions Secrets به نام‌های `USERINFO_ANDROID_KEYSTORE_B64`, `USERINFO_ANDROID_KEY_ALIAS`, `USERINFO_ANDROID_KEY_PASSWORD`, `USERINFO_ANDROID_STORE_PASSWORD` تنظیم کنید. هیچ‌وقت keystore و رمزها را داخل مخزن عمومی ثبت نکنید.
+
 ## شروع روی ویندوز
 
 نیازمند نصب Flutter SDK، Android SDK و JDK سازگار است.
@@ -28,7 +39,9 @@ powershell -ExecutionPolicy Bypass -File .\tool\bootstrap.ps1
 یا به ترتیب:
 
 ```powershell
-flutter create . --platforms=android --org com.example --no-pub
+flutter create . --platforms=android --org com.amindada021 --no-pub
+mkdir -p android/app/src/main/kotlin/com/amindada021/userinfo
+cp platform_templates/MainActivity.kt android/app/src/main/kotlin/com/amindada021/userinfo/MainActivity.kt
 flutter pub get
 flutter analyze
 flutter test
@@ -55,7 +68,7 @@ flutter build apk --debug
 ## اصول امنیت داده
 
 - هیچ CSV واقعی، تصویر یا لاگ حاوی رکورد، SQLite، PDF و XLSX را Commit یا روی GitHub آپلود نکنید.
-- پیشنهاد اکید: ریپازیتوری را Private کنید.
+- مخزن Public است؛ هرگز فایل‌های حاوی داده شخصی و کلید امضا را Commit نکنید.
 - برنامه اینترنت/API/Analytics ندارد.
 - اطلاعات موجود در Clipboard و فایل Export پس از خروج از اپ تحت حفاظت برنامه نیستند.
 - تست خودکار فقط از رشته‌های ساختگی استفاده می‌کند.

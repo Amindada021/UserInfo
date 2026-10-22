@@ -3,8 +3,11 @@ if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
     throw 'Flutter SDK is not on PATH. Install Flutter and Android SDK first.'
 }
 Write-Host 'Generating Android Flutter project files...' -ForegroundColor Cyan
-flutter create . --platforms=android --org com.example --no-pub
+flutter create . --platforms=android --org com.amindada021 --no-pub
 if ($LASTEXITCODE -ne 0) { throw 'flutter create failed' }
+$activityDirectory = Join-Path $PWD 'android/app/src/main/kotlin/com/amindada021/userinfo'
+New-Item -ItemType Directory -Force -Path $activityDirectory | Out-Null
+Copy-Item 'platform_templates/MainActivity.kt' (Join-Path $activityDirectory 'MainActivity.kt') -Force
 flutter pub get
 if ($LASTEXITCODE -ne 0) { throw 'flutter pub get failed' }
 flutter analyze

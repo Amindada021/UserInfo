@@ -1,4 +1,4 @@
-package com.example.userinfo
+package com.amindada021.userinfo
 
 import android.app.Activity
 import android.content.Intent

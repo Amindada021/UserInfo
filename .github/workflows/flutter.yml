@@ -1,4 +1,5 @@
-name: Flutter Android CI
+name: UserInfo Android
+
 on:
   push:
     branches: [main]
@@ -6,29 +7,168 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: userinfo-android-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  validate:
+  build-and-release:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-      - name: Generate missing standard Android scaffolding
-        run: flutter create . --platforms=android --org com.example --no-pub
-      - name: Resolve packages
+
+      - name: Generate Android scaffolding and restore CSV bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter create . --platforms=android --org com.amindada021 --no-pub
+          mkdir -p android/app/src/main/kotlin/com/amindada021/userinfo
+          cp platform_templates/MainActivity.kt android/app/src/main/kotlin/com/amindada021/userinfo/MainActivity.kt
+
+      - name: Resolve dependencies
         run: flutter pub get
+
       - name: Analyze
         run: flutter analyze
-      - name: Tests
+
+      - name: Test
         run: flutter test
-      - name: Build debug APK
-        run: flutter build apk --debug
-      - uses: actions/upload-artifact@v4
+
+      - name: Read semantic version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          FULL_VERSION="$(awk '/^version:/ { print $2 }' pubspec.yaml)"
+          VERSION="${FULL_VERSION%%+*}"
+          BUILD_NUMBER="${FULL_VERSION##*+}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid pubspec.yaml version; expected 0.1.0+1"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Configure stable Android signing when secrets are available
+        id: signing
+        shell: bash
+        env:
+          USERINFO_ANDROID_KEYSTORE_B64: ${{ secrets.USERINFO_ANDROID_KEYSTORE_B64 }}
+          USERINFO_ANDROID_KEY_ALIAS: ${{ secrets.USERINFO_ANDROID_KEY_ALIAS }}
+          USERINFO_ANDROID_KEY_PASSWORD: ${{ secrets.USERINFO_ANDROID_KEY_PASSWORD }}
+          USERINFO_ANDROID_STORE_PASSWORD: ${{ secrets.USERINFO_ANDROID_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SIGNING_VALUES=("$USERINFO_ANDROID_KEYSTORE_B64" "$USERINFO_ANDROID_KEY_ALIAS" "$USERINFO_ANDROID_KEY_PASSWORD" "$USERINFO_ANDROID_STORE_PASSWORD")
+          PRESENT=0
+          for value in "${SIGNING_VALUES[@]}"; do
+            [[ -z "$value" ]] || PRESENT=$((PRESENT + 1))
+          done
+          if [[ "$PRESENT" == 0 ]]; then
+            echo "mode=temporary-debug" >> "$GITHUB_OUTPUT"
+            echo "::warning::No persistent signing keystore configured; APK upgrades across builds are not guaranteed."
+            exit 0
+          fi
+          if [[ "$PRESENT" != 4 ]]; then
+            echo "::error::Configure all four USERINFO_ANDROID_* secrets or none."
+            exit 1
+          fi
+          printf '%s' "$USERINFO_ANDROID_KEYSTORE_B64" | base64 --decode > android/app/userinfo-release.jks
+          chmod 600 android/app/userinfo-release.jks
+          python3 - <<'PY'
+          from pathlib import Path
+          gradle = Path('android/app/build.gradle.kts')
+          text = gradle.read_text()
+          expected = 'signingConfig = signingConfigs.getByName("debug")'
+          if expected not in text:
+              raise SystemExit('Expected Flutter default release signing line not found')
+          config = """
+              signingConfigs {
+                  create("release") {
+                      keyAlias = System.getenv("USERINFO_ANDROID_KEY_ALIAS")
+                      keyPassword = System.getenv("USERINFO_ANDROID_KEY_PASSWORD")
+                      storeFile = file("userinfo-release.jks")
+                      storePassword = System.getenv("USERINFO_ANDROID_STORE_PASSWORD")
+                  }
+              }
+          """
+          text = text.replace('    buildTypes {', config + '    buildTypes {', 1)
+          text = text.replace(expected, 'signingConfig = signingConfigs.getByName("release")', 1)
+          gradle.write_text(text)
+          PY
+          echo "mode=persistent" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        shell: bash
+        env:
+          USERINFO_ANDROID_KEY_ALIAS: ${{ secrets.USERINFO_ANDROID_KEY_ALIAS }}
+          USERINFO_ANDROID_KEY_PASSWORD: ${{ secrets.USERINFO_ANDROID_KEY_PASSWORD }}
+          USERINFO_ANDROID_STORE_PASSWORD: ${{ secrets.USERINFO_ANDROID_STORE_PASSWORD }}
+        run: |
+          flutter build apk --release \
+            --build-name "${{ steps.version.outputs.version }}" \
+            --build-number "${{ steps.version.outputs.build_number }}"
+
+      - name: Prepare versioned files and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          cp build/app/outputs/flutter-apk/app-release.apk "UserInfo-v$VERSION.apk"
+          cp "UserInfo-v$VERSION.apk" "UserInfo-latest.apk"
+          sha256sum "UserInfo-v$VERSION.apk" > "UserInfo-v$VERSION.apk.sha256"
+          sha256sum "UserInfo-latest.apk" > "UserInfo-latest.apk.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: userinfo-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
-          if-no-files-found: error
+          name: UserInfo-v${{ steps.version.outputs.version }}
+          path: |
+            UserInfo-v${{ steps.version.outputs.version }}.apk
+            UserInfo-v${{ steps.version.outputs.version }}.apk.sha256
           retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish version to GitHub Releases
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists. Increase pubspec.yaml version to publish a new release."
+            exit 0
+          fi
+          cat > release-notes.md <<EOF
+          UserInfo $TAG — اپ اندروید آفلاین (نسخه آزمایشی).
+
+          - دانلود برای گوشی: UserInfo-latest.apk
+          - دانلود آرشیوی نسخه: UserInfo-v$VERSION.apk
+          - فایل‌های SHA256 برای اعتبارسنجی دانلود ارائه شده‌اند.
+          - دیتابیس نسخه فعلی هنوز رمزگذاری‌شده نیست؛ **برای تست فقط از داده ساختگی استفاده کنید**.
+          - حالت امضای APK: ${{ steps.signing.outputs.mode }}.
+          - در صورت امضای موقت، نصب نسخه بعدی ممکن است به حذف نسخه قبلی نیاز داشته باشد.
+          EOF
+          gh release create "$TAG" \
+            "UserInfo-v$VERSION.apk" "UserInfo-v$VERSION.apk.sha256" \
+            "UserInfo-latest.apk" "UserInfo-latest.apk.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "UserInfo $TAG" \
+            --notes-file release-notes.md \
+            --latest
