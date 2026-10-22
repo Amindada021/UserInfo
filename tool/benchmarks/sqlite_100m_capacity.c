@@ -32,6 +32,7 @@ static long long filelen(const char *f) {
     struct stat s;
     return stat(f, &s) == 0 ? s.st_size : 0;
 }
+static char storage_dir[4096] = ".";
 static long long available(const char *folder) {
     struct statvfs v;
     return statvfs(folder, &v) == 0 ? (long long)v.f_bavail * v.f_frsize : -1;
@@ -75,6 +76,14 @@ int main(int argc, char **argv) {
         return 1;
     }
     const char *file = argv[1];
+    const char *slash = strrchr(file, '/');
+    if (slash) {
+        const size_t n = (size_t)(slash - file);
+        if (n > 0 && n < sizeof(storage_dir)) {
+            memcpy(storage_dir, file, n);
+            storage_dir[n] = '\0';
+        }
+    }
     long long total = atoll(argv[2]);
     int usefts = atoi(argv[3]);
     if (total < 1 || total > 100000000) {
@@ -121,10 +130,10 @@ int main(int argc, char **argv) {
             printf("INSERT_PROGRESS %lld/%lld elapsed_s=%.2f "
                     "interval_rows_sec=%.0f db_bytes=%lld free_bytes=%lld\n",
                     i, total, t - begun, 1000000.0/(t-checkpoint),
-                    filelen(file), available("/mnt/data"));
+                    filelen(file), available(storage_dir));
             fflush(stdout);
             checkpoint = t;
-            if (available("/mnt/data") < 3000000000LL) {
+            if (available(storage_dir) < 3000000000LL) {
                 fputs("STOP free disk <3GB\n", stderr);
                 exit(3);
             }
@@ -156,9 +165,9 @@ int main(int argc, char **argv) {
             if (((begin / 1000000) % 5) == 4 || begin + 1000000 >= total) {
                 printf("FTS_PROGRESS %lld/%lld sec=%.1f db_bytes=%lld free_bytes=%lld\n",
                     begin + 1000000 < total ? begin + 1000000 : total,
-                    total, now()-ft, filelen(file), available("/mnt/data"));
+                    total, now()-ft, filelen(file), available(storage_dir));
                 fflush(stdout);
-                if (available("/mnt/data") < 2500000000LL) {
+                if (available(storage_dir) < 2500000000LL) {
                     fputs("STOP fts disk <2.5GB\n", stderr);
                     exit(3);
                 }
@@ -193,7 +202,7 @@ int main(int argc, char **argv) {
             "\"حسی*\"");
     }
     printf("DONE rows=%lld final_db_bytes=%lld sqlite=%s free_bytes=%lld\n",
-           total, filelen(file), sqlite3_libversion(), available("/mnt/data"));
+           total, filelen(file), sqlite3_libversion(), available(storage_dir));
     fflush(stdout);
     sqlite3_close(db);
     return 0;
