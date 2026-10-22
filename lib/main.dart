@@ -206,26 +206,46 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  int _searchGeneration = 0;
+
   Future<void> _load({bool resetPage = false}) async {
     if (_maintenanceBusy) return;
     if (resetPage) _page = 0;
+    final generation = ++_searchGeneration;
+    final filters = _filter;
+    final requestedPage = _page;
     if (mounted) setState(() => _busy = true);
     try {
-      final count = await _database.count(_filter);
-      final lastPage = count == 0 ? 0 : (count - 1) ~/ _pageSize;
-      if (_page > lastPage) _page = lastPage;
+      // Show the first page before performing potentially expensive COUNT.
+      // In a 100-million-row DB, even FTS MATCH COUNT may take noticeable time
+      // for very broad terms. Stale responses from fast typing are discarded.
       final rows = await _database.search(
-          _filter, page: _page, pageSize: _pageSize);
+          filters, page: requestedPage, pageSize: _pageSize);
+      if (generation != _searchGeneration) return;
       if (mounted) {
         setState(() {
-          _count = count;
           _rows = rows;
+          _busy = false;
         });
       }
+
+      final count = await _database.count(filters);
+      if (generation != _searchGeneration) return;
+      final lastPage = count == 0 ? 0 : (count - 1) ~/ _pageSize;
+      if (_page > lastPage) {
+        _page = lastPage;
+        _load();
+        return;
+      }
+      if (mounted) setState(() => _count = count);
     } catch (error) {
-      _message('خطا در خواندن نتایج: $error');
+      if (generation == _searchGeneration) {
+        _message('خطا در خواندن نتایج: $error');
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _busy = false);
+      }
     }
   }
 
