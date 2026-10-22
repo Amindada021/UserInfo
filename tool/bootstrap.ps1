@@ -8,6 +8,8 @@ if ($LASTEXITCODE -ne 0) { throw 'flutter create failed' }
 $activityDirectory = Join-Path $PWD 'android/app/src/main/kotlin/com/amindada021/userinfo'
 New-Item -ItemType Directory -Force -Path $activityDirectory | Out-Null
 Copy-Item 'platform_templates/MainActivity.kt' (Join-Path $activityDirectory 'MainActivity.kt') -Force
+Copy-Item 'platform_templates/ImportForegroundService.kt' (Join-Path $activityDirectory 'ImportForegroundService.kt') -Force
+Copy-Item 'platform_templates/AndroidManifest.xml' 'android/app/src/main/AndroidManifest.xml' -Force
 $fontFolder = Join-Path $PWD 'assets/fonts'
 New-Item -ItemType Directory -Force -Path $fontFolder | Out-Null
 Invoke-WebRequest 'https://raw.githubusercontent.com/google/fonts/main/ofl/lateef/Lateef-Regular.ttf' -OutFile (Join-Path $fontFolder 'Lateef-Regular.ttf')

@@ -35,6 +35,8 @@ jobs:
           flutter create . --platforms=android --org com.amindada021 --no-pub
           mkdir -p android/app/src/main/kotlin/com/amindada021/userinfo
           cp platform_templates/MainActivity.kt android/app/src/main/kotlin/com/amindada021/userinfo/MainActivity.kt
+          cp platform_templates/ImportForegroundService.kt android/app/src/main/kotlin/com/amindada021/userinfo/ImportForegroundService.kt
+          cp platform_templates/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
       - name: Bundle Persian PDF font and OFL license
         shell: bash
