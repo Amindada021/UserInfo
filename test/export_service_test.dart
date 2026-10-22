@@ -21,7 +21,7 @@ void main() {
     final bytes = ExportService.generateExcel(sample, sensitive: false);
     expect(bytes.take(2).toList(), [0x50, 0x4b]);
     final zip = ZipDecoder().decodeBytes(bytes);
-    final sheet = zip.find('xl/worksheets/sheet1.xml');
+    final sheet = zip.files.where((file) => file.name == 'xl/worksheets/sheet1.xml').firstOrNull;
     expect(sheet, isNotNull);
     final sheetXml = utf8.decode(sheet!.content as List<int>);
     expect(sheetXml, contains('rightToLeft="1"'));

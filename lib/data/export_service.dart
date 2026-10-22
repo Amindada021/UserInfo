@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:excel/excel.dart';
@@ -115,7 +114,7 @@ class ExportService {
           xml = xml.replaceFirstMapped(sheetView, (match) {
             var attributes = (match.group(1) ?? '').replaceAll(
                 RegExp(r'\srightToLeft="[^"]*"'), '');
-            return '<sheetView${attributes} rightToLeft="1"${match.group(2)}>';
+            return '<sheetView$attributes rightToLeft="1"${match.group(2)}>';
           });
         } else if (xml.contains('<sheetViews/>')) {
           xml = xml.replaceFirst('<sheetViews/>',
@@ -128,9 +127,9 @@ class ExportService {
               '<sheetViews><sheetView workbookViewId="0" rightToLeft="1"/></sheetViews><sheetData');
         }
         corrected++;
-        output.add(ArchiveFile(entry.name, utf8.encode(xml).length, utf8.encode(xml)));
+        output.addFile(ArchiveFile(entry.name, utf8.encode(xml).length, utf8.encode(xml)));
       } else {
-        output.add(ArchiveFile(entry.name, data.length, data));
+        output.addFile(ArchiveFile(entry.name, data.length, data));
       }
     }
     if (corrected == 0) {
