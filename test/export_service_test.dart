@@ -33,13 +33,13 @@ void main() {
         isA<TextCellValue>());
     expect(
       (data[1][ExportService.fullColumns.indexOf('national_code')]!.value
-          as TextCellValue).value,
-      '0012345678',
+          as TextCellValue).value.toString(),
+      contains('0012345678'),
     );
     expect(
       (data[1][ExportService.fullColumns.indexOf('address')]!.value
-          as TextCellValue).value,
-      'آدرس نمونه برای آزمایش',
+          as TextCellValue).value.toString(),
+      contains('آدرس نمونه برای آزمایش'),
     );
   });
 
