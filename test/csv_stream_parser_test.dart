@@ -51,7 +51,7 @@ void main() {
 
   test('oversized unclosed record is bounded and next physical line resumes',
       () async {
-    final input = 'A,B\n"bad-${'x' * 150}\ngood,4\n';
+    final input = 'A,B\n"bad-${List.filled(150, 'x').join()}\ngood,4\n';
     final rows = await const CsvStreamParser(maxRecordCharacters: 70)
         .parseWithErrors(Stream.value(utf8.encode(input)))
         .toList();
