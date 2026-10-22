@@ -62,6 +62,9 @@ jobs:
       - name: Synthetic database benchmark
         run: flutter test test/database_benchmark_test.dart --dart-define=USERINFO_RUN_BENCHMARK=true
 
+      - name: Synthetic complete import benchmark
+        run: flutter test test/import_benchmark_test.dart --dart-define=USERINFO_RUN_BENCHMARK=true
+
       - name: Synthetic parser benchmark
         run: dart run tool/benchmarks/parser_benchmark.dart 1000000
 
@@ -182,7 +185,11 @@ jobs:
           - فایل‌های SHA256 برای اعتبارسنجی دانلود ارائه شده‌اند.
           - دیتابیس نسخه فعلی هنوز رمزگذاری‌شده نیست؛ **برای تست فقط از داده ساختگی استفاده کنید**.
           - حالت امضای APK: ${{ steps.signing.outputs.mode }}.
-          - در صورت امضای موقت، نصب نسخه بعدی ممکن است به حذف نسخه قبلی نیاز داشته باشد.
+          - اگر نصب به علت امضای متفاوت رد شد، نسخه قبلی را بدون بکاپ SQLite حذف نکنید. ابتدا از داخل همان نسخه بکاپ بگیرید.
+          - جستجوی پیشوندی ایندکس‌شده، صفحه‌بندی Cursor، درج گروهی و ادامه فایل‌های شروع‌شده در نسخه جدید اضافه شده‌اند.
+          - تا تکمیل ایندکس، نتایج فقط شامل بخش ایندکس‌شده‌اند.
+          - عملکرد ۱۰۰ میلیون رکورد و سرعت POCO هنوز تأیید نشده است.
+          - گزارش و روش تست: https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/PERFORMANCE_2026-10-22.md
           EOF
           gh release create "$TAG" \
             "UserInfo-v$VERSION.apk" "UserInfo-v$VERSION.apk.sha256" \

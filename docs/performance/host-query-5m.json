@@ -1,0 +1,161 @@
+{
+  "rows": 5000000,
+  "sqlite": "3.53.1",
+  "insert_rows_sec": 520515.1897321974,
+  "backfill_rows_sec": 418844.9274075376,
+  "queries": {
+    "old_mobile_like": {
+      "p50_ms": 272.3840869999776,
+      "p95_ms": 322.34178099997735,
+      "plan": [
+        [
+          4,
+          0,
+          216,
+          "SCAN records"
+        ]
+      ]
+    },
+    "mobile_range": {
+      "p50_ms": 0.004065999974045553,
+      "p95_ms": 0.04052100001672443,
+      "plan": [
+        [
+          5,
+          0,
+          165,
+          "SEARCH records USING INDEX idx_mobile (mobile>? AND mobile<?)"
+        ],
+        [
+          26,
+          0,
+          0,
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      ]
+    },
+    "old_name_fallback": {
+      "p50_ms": 472.061315000019,
+      "p95_ms": 505.8516629999872,
+      "plan": [
+        [
+          4,
+          0,
+          216,
+          "SCAN records"
+        ]
+      ]
+    },
+    "fts_absent": {
+      "p50_ms": 5.618900999991183,
+      "p95_ms": 5.953633999979502,
+      "plan": [
+        [
+          5,
+          0,
+          10,
+          "SCAN fts VIRTUAL TABLE INDEX 3:DESC"
+        ],
+        [
+          10,
+          0,
+          45,
+          "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      ]
+    },
+    "fts_prefix": {
+      "p50_ms": 0.12046099999452053,
+      "p95_ms": 0.3097250000223539,
+      "plan": [
+        [
+          5,
+          0,
+          10,
+          "SCAN fts VIRTUAL TABLE INDEX 3:DESC"
+        ],
+        [
+          10,
+          0,
+          45,
+          "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      ]
+    },
+    "deep_offset": {
+      "p50_ms": 97.37003200001482,
+      "p95_ms": 99.52505699999392,
+      "plan": [
+        [
+          7,
+          0,
+          216,
+          "SCAN records"
+        ]
+      ]
+    },
+    "keyset": {
+      "p50_ms": 0.010384999995949329,
+      "p95_ms": 0.02772099998082922,
+      "plan": [
+        [
+          4,
+          0,
+          196,
+          "SEARCH records USING INTEGER PRIMARY KEY (rowid<?)"
+        ]
+      ]
+    },
+    "count": {
+      "p50_ms": 21.83350099994641,
+      "p95_ms": 25.151848999996673,
+      "plan": [
+        [
+          4,
+          0,
+          0,
+          "SCAN records USING COVERING INDEX idx_mobile"
+        ]
+      ]
+    }
+  },
+  "database_bytes": 801112064,
+  "objects_bytes": [
+    [
+      "fts_content",
+      254406656
+    ],
+    [
+      "fts_docsize",
+      53235712
+    ],
+    [
+      "fts_segdir",
+      12288
+    ],
+    [
+      "fts_segments",
+      50274304
+    ],
+    [
+      "fts_stat",
+      4096
+    ],
+    [
+      "idx_mobile",
+      114507776
+    ],
+    [
+      "records",
+      317038592
+    ],
+    [
+      "sqlite_autoindex_fts_segdir_1",
+      4096
+    ],
+    [
+      "sqlite_schema",
+      4096
+    ]
+  ]
+}

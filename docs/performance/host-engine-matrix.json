@@ -1,0 +1,202 @@
+{
+  "rows": 100000,
+  "sqlite": "3.53.1",
+  "settings": [
+    {
+      "journal": "DELETE",
+      "sync": "FULL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 1000,
+      "rows_sec": 108537.7717154626,
+      "db_bytes": 7553024,
+      "wal_bytes": 0
+    },
+    {
+      "journal": "DELETE",
+      "sync": "FULL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 2000,
+      "rows_sec": 179217.65736090438,
+      "db_bytes": 7553024,
+      "wal_bytes": 0
+    },
+    {
+      "journal": "DELETE",
+      "sync": "FULL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 5000,
+      "rows_sec": 308974.8814389786,
+      "db_bytes": 7553024,
+      "wal_bytes": 0
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 1000,
+      "rows_sec": 159144.95616479075,
+      "db_bytes": 7479296,
+      "wal_bytes": 7865112
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 2000,
+      "rows_sec": 242157.5667707771,
+      "db_bytes": 7553024,
+      "wal_bytes": 7976352
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 5000,
+      "rows_sec": 344786.30815229524,
+      "db_bytes": 7553024,
+      "wal_bytes": 7745632
+    },
+    {
+      "journal": "WAL",
+      "sync": "NORMAL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 1000,
+      "rows_sec": 175321.95018403267,
+      "db_bytes": 7479296,
+      "wal_bytes": 7865112
+    },
+    {
+      "journal": "WAL",
+      "sync": "NORMAL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 2000,
+      "rows_sec": 241524.1921293762,
+      "db_bytes": 7553024,
+      "wal_bytes": 7976352
+    },
+    {
+      "journal": "WAL",
+      "sync": "NORMAL",
+      "cache_kib": 2048,
+      "temp": "DEFAULT",
+      "mmap": 0,
+      "batch": 5000,
+      "rows_sec": 285608.9115304009,
+      "db_bytes": 7553024,
+      "wal_bytes": 7745632
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 8192,
+      "temp": "MEMORY",
+      "mmap": 0,
+      "batch": 1000,
+      "rows_sec": 180716.2653757678,
+      "db_bytes": 7479296,
+      "wal_bytes": 7865112
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 8192,
+      "temp": "MEMORY",
+      "mmap": 0,
+      "batch": 2000,
+      "rows_sec": 276390.9661436097,
+      "db_bytes": 7553024,
+      "wal_bytes": 7976352
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 8192,
+      "temp": "MEMORY",
+      "mmap": 0,
+      "batch": 5000,
+      "rows_sec": 413289.1916229622,
+      "db_bytes": 7553024,
+      "wal_bytes": 7745632
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 8192,
+      "temp": "MEMORY",
+      "mmap": 67108864,
+      "batch": 1000,
+      "rows_sec": 176606.89946571938,
+      "db_bytes": 7479296,
+      "wal_bytes": 7865112
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 8192,
+      "temp": "MEMORY",
+      "mmap": 67108864,
+      "batch": 2000,
+      "rows_sec": 265785.1099053815,
+      "db_bytes": 7553024,
+      "wal_bytes": 7976352
+    },
+    {
+      "journal": "WAL",
+      "sync": "FULL",
+      "cache_kib": 8192,
+      "temp": "MEMORY",
+      "mmap": 67108864,
+      "batch": 5000,
+      "rows_sec": 448870.4043855659,
+      "db_bytes": 7553024,
+      "wal_bytes": 7745632
+    }
+  ],
+  "engines": [
+    {
+      "engine": "fts4",
+      "rows_sec": 331734.47269530146,
+      "db_bytes": 5894144,
+      "query_ms": 1.8607849999625614,
+      "result_count": 20
+    },
+    {
+      "engine": "fts5",
+      "rows_sec": 366613.4730070202,
+      "db_bytes": 5677056,
+      "query_ms": 2.4107209999328916,
+      "result_count": 20
+    },
+    {
+      "engine": "token",
+      "rows_sec": 191003.1058327745,
+      "db_bytes": 12906496,
+      "query_ms": 0.10416600002827181,
+      "result_count": 20
+    },
+    {
+      "engine": "btree",
+      "rows_sec": 190203.52846489163,
+      "db_bytes": 8208384,
+      "query_ms": 0.06138200001259975,
+      "result_count": 0
+    }
+  ],
+  "note": "B-tree cannot match non-leading name words. Token index result is single-term only; not equivalent to FTS AND. No Android claim."
+}

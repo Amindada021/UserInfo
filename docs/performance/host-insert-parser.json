@@ -1,0 +1,111 @@
+{
+  "run": "https://github.com/Amindada021/UserInfo/actions/runs/39848647336",
+  "commit": "6f8dd24f2f6c724c298d09da9427a16e42b0e285",
+  "note": "Linux FFI and Dart VM; not Android. Job subsequently cancelled by next checkpoint push after benchmarks completed.",
+  "inserts": [
+    {
+      "mode": "legacy",
+      "batch": 1000,
+      "rows": 100000,
+      "rows_sec": 9881.365316150825,
+      "batch_p50_us": 98275,
+      "batch_p95_us": 103629,
+      "database_bytes": 24981504,
+      "journal": "delete",
+      "synchronous": 2
+    },
+    {
+      "mode": "grouped",
+      "batch": 1000,
+      "rows": 100000,
+      "rows_sec": 45213.35276904658,
+      "batch_p50_us": 19817,
+      "batch_p95_us": 20392,
+      "database_bytes": 24981504,
+      "journal": "delete",
+      "synchronous": 2
+    },
+    {
+      "mode": "legacy",
+      "batch": 1500,
+      "rows": 100500,
+      "rows_sec": 9965.164561058795,
+      "batch_p50_us": 146592,
+      "batch_p95_us": 151797,
+      "database_bytes": 25112576,
+      "journal": "delete",
+      "synchronous": 2
+    },
+    {
+      "mode": "grouped",
+      "batch": 1500,
+      "rows": 100500,
+      "rows_sec": 47131.563656452636,
+      "batch_p50_us": 29065,
+      "batch_p95_us": 30407,
+      "database_bytes": 25112576,
+      "journal": "delete",
+      "synchronous": 2
+    },
+    {
+      "mode": "legacy",
+      "batch": 2000,
+      "rows": 100000,
+      "rows_sec": 10030.107373302442,
+      "batch_p50_us": 194967,
+      "batch_p95_us": 202156,
+      "database_bytes": 24981504,
+      "journal": "delete",
+      "synchronous": 2
+    },
+    {
+      "mode": "grouped",
+      "batch": 2000,
+      "rows": 100000,
+      "rows_sec": 48615.85790945977,
+      "batch_p50_us": 36934,
+      "batch_p95_us": 38738,
+      "database_bytes": 24981504,
+      "journal": "delete",
+      "synchronous": 2
+    },
+    {
+      "mode": "legacy",
+      "batch": 5000,
+      "rows": 100000,
+      "rows_sec": 9987.553510814823,
+      "batch_p50_us": 490364,
+      "batch_p95_us": 496226,
+      "database_bytes": 24981504,
+      "journal": "delete",
+      "synchronous": 2
+    },
+    {
+      "mode": "grouped",
+      "batch": 5000,
+      "rows": 100000,
+      "rows_sec": 48373.723780232365,
+      "batch_p50_us": 93684,
+      "batch_p95_us": 98905,
+      "database_bytes": 24981504,
+      "journal": "delete",
+      "synchronous": 2
+    }
+  ],
+  "parser": {
+    "rows": 1000000,
+    "runtime": "3.13.5 (stable) (Tue Sep 29 01:00:52 2026 -0700) on \"linux_x64\"",
+    "legacy_per_row": {
+      "p50_us": 3981004,
+      "p95_us": 4011597,
+      "rows_sec": 251192.91515406666,
+      "peak_rss_bytes": 203743232
+    },
+    "batched": {
+      "p50_us": 3395332,
+      "p95_us": 3427203,
+      "rows_sec": 294522.0084516035,
+      "peak_rss_bytes": 205238272
+    }
+  }
+}
