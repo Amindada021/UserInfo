@@ -174,10 +174,12 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     _indexPauseRequested = false;
-    if (mounted) setState(() {
-      _buildingIndex = true;
-      _indexError = null;
-    });
+    if (mounted) {
+      setState(() {
+        _buildingIndex = true;
+        _indexError = null;
+      });
+    }
     await _safeKeepScreenOn(true);
     try {
       var status = await _database.nameIndexStatus();
@@ -217,10 +219,12 @@ class _HomePageState extends State<HomePage> {
       if (mounted) setState(() => _indexError = error.toString());
     } finally {
       await _safeKeepScreenOn(false);
-      if (mounted) setState(() {
-        _buildingIndex = false;
-        _indexPauseRequested = false;
-      });
+      if (mounted) {
+        setState(() {
+          _buildingIndex = false;
+          _indexPauseRequested = false;
+        });
+      }
     }
   }
 
@@ -317,13 +321,15 @@ class _HomePageState extends State<HomePage> {
         ));
         if (proceed != true) return;
       }
-      if (mounted) setState(() {
-        _showImportSummary = true;
-        _rows = const [];
-        _hasNext = false;
-        _count = null;
-        _busy = false;
-      });
+      if (mounted) {
+        setState(() {
+          _showImportSummary = true;
+          _rows = const [];
+          _hasNext = false;
+          _count = null;
+          _busy = false;
+        });
+      }
       keepScreen = true;
       await _safeKeepScreenOn(true);
       await _import.importDocuments(documents);
