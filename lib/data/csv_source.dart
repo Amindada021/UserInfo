@@ -32,10 +32,15 @@ class CsvSource {
   Future<void> open(CsvDocument document) async =>
       _channel.invokeMethod<void>('open', {'uri': document.uri});
 
-  Future<Uint8List?> read() async =>
-      PerformanceMetrics.measure('saf_channel_read',
-          () => _channel.invokeMethod<Uint8List>('read'));
-
+  Future<Uint8List?> read() async {
+    if (!PerformanceMetrics.enabled) return _channel.invokeMethod<Uint8List>('read');
+    return PerformanceMetrics.measure('saf_channel_read', () async {
+      final result = await _channel.invokeMapMethod<String, dynamic>('readMeasured');
+      if (result == null) return null;
+      PerformanceMetrics.record('saf_native_read', (result['read_us'] as num).toInt());
+      return result['bytes'] as Uint8List?;
+    });
+  }
 
   /// Keep a foreground Android service active for long-running imports.
   /// This improves screen-off survival but is not a crash/reboot resume system.

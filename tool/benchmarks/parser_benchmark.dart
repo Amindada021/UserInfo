@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import '../../lib/core/csv_stream_parser.dart';
+import 'package:userinfo/core/csv_stream_parser.dart';
 import 'legacy_csv_parser.dart';
 
 Stream<List<int>> synthetic(int rows) async* {

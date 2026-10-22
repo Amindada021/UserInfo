@@ -202,14 +202,18 @@ class MainActivity : FlutterActivity() {
                 "freeBytes" -> {
                     result.success(android.os.StatFs(applicationInfo.dataDir).availableBytes)
                 }
-                "read" -> {
+                "read", "readMeasured" -> {
                     ioExecutor.execute {
                         try {
                             val stream = currentStream ?: error("No input stream")
                             val buffer = ByteArray(1024 * 1024)
+                            val started = System.nanoTime()
                             val count = stream.read(buffer)
+                            val readUs = (System.nanoTime() - started) / 1000
                             runOnUiThread {
-                                result.success(if (count < 0) null else if (count == buffer.size) buffer else buffer.copyOf(count))
+                                val bytes = if (count < 0) null else if (count == buffer.size) buffer else buffer.copyOf(count)
+                                result.success(if (call.method == "readMeasured")
+                                    mapOf("bytes" to bytes, "read_us" to readUs) else bytes)
                             }
                         } catch (e: Exception) {
                             runOnUiThread { result.error("READ_FAILED", e.message, null) }

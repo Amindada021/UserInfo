@@ -42,6 +42,20 @@ class CsvStreamParser {
     }
   }
 
+  Stream<String> _decode(Stream<List<int>> bytes) async* {
+    final sink = _DecodedChunks();
+    final decoder = const Utf8Decoder(allowMalformed: true).startChunkedConversion(sink);
+    await for (final chunk in bytes) {
+      final watch = PerformanceMetrics.enabled ? (Stopwatch()..start()) : null;
+      decoder.add(chunk);
+      if (watch != null) PerformanceMetrics.record('utf8_decode', watch.elapsedMicroseconds);
+      for (final text in sink.chunks) { yield text; }
+      sink.chunks.clear();
+    }
+    decoder.close();
+    for (final text in sink.chunks) { yield text; }
+  }
+
   /// Amortize async stream scheduling while bounding both rows and chunk bytes.
   Stream<List<CsvParsedRecord>> parseBatches(Stream<List<int>> bytes) async* {
     var pending = <CsvParsedRecord>[];
@@ -84,8 +98,7 @@ class CsvStreamParser {
 
     // Replacement decoding permits continuing past a malformed UTF-8 byte.
     // A row containing U+FFFD is rejected instead of silently changing an ID.
-    await for (final chunk in bytes.transform(
-        const Utf8Decoder(allowMalformed: true))) {
+    await for (final chunk in _decode(bytes)) {
       watch?.start();
       // Iterate lazily over characters: chunk.split('') allocates hundreds
       // of thousands of temporary String objects for every 256 KB chunk.
@@ -226,4 +239,10 @@ class CsvStreamParser {
     }
     if (pending.isNotEmpty) yield pending;
   }
+}
+
+class _DecodedChunks implements Sink<String> {
+  final List<String> chunks = [];
+  @override void add(String data) { chunks.add(data); }
+  @override void close() {}
 }

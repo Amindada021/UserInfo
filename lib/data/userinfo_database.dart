@@ -38,7 +38,16 @@ class UserInfoDatabase {
   bool _nameIndexReady = false;
   bool _nameIndexBuildRunning = false;
   bool _maintenanceRunning = false;
-  Future<Database> get db async => _db ??= await _open();
+  Future<Database>? _opening;
+  Future<Database> get db async {
+    if (_db != null) return _db!;
+    final pending = _opening ??= _open();
+    try {
+      return _db = await pending;
+    } finally {
+      if (identical(_opening, pending)) _opening = null;
+    }
+  }
 
   Future<Database> _open() async {
     final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
@@ -419,6 +428,7 @@ class UserInfoDatabase {
       {int? csvRecord}) async {
     if (rows.isEmpty && csvRecord == null) return;
     final database = await db;
+    final commitWatch = PerformanceMetrics.enabled ? Stopwatch() : null;
     await PerformanceMetrics.measure('insert_transaction', () => database.transaction((tx) async {
       final batch = tx.batch();
       // Bound parameters below Android's conservative 999-variable limit.
@@ -448,7 +458,11 @@ class UserInfoDatabase {
       await tx.rawUpdate(
           'UPDATE files SET imported_count = imported_count + ? WHERE id = ?',
           [rows.length, fileId]);
+      commitWatch?.start();
     }));
+    if (commitWatch != null) {
+      PerformanceMetrics.record('commit_completion', commitWatch.elapsedMicroseconds);
+    }
   }
 
   Future<void> finishFile(int fileId) async {

@@ -217,6 +217,7 @@ class ImportController extends ChangeNotifier {
       return 'SQLITE_WRITE_FAILED';
     }
     if (error is ImportCancelled) return 'CANCELLED';
+    if (error is StateError && error.message == 'LOW_STORAGE') return 'فضای ذخیره‌سازی کافی نیست';
     if (error is FormatException) return 'INVALID_CSV_FORMAT';
     return 'IO_OR_IMPORT_FAILED';
   }
