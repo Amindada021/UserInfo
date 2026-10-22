@@ -100,8 +100,14 @@ jobs:
             [[ -z "$value" ]] || PRESENT=$((PRESENT + 1))
           done
           if [[ "$PRESENT" == 0 ]]; then
+            # PR validation can use an ephemeral key, but never publish APKs
+            # signed by the runner's disposable debug certificate.
+            if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+              echo "::error::Release signing is NOT configured. Publishing would force users to uninstall and lose app data. Configure the four USERINFO_ANDROID_* Actions secrets per docs/ANDROID_SIGNING_AND_TRANSFER.md."
+              exit 1
+            fi
             echo "mode=temporary-debug" >> "$GITHUB_OUTPUT"
-            echo "::warning::No persistent signing keystore configured. APK upgrades across builds are not guaranteed. Follow docs/ANDROID_SIGNING_AND_TRANSFER.md before storing important data."
+            echo "::warning::PR test build only; debug signing is not for distribution."
             exit 0
           fi
           if [[ "$PRESENT" != 4 ]]; then
@@ -144,6 +150,19 @@ jobs:
             --build-name "${{ steps.version.outputs.version }}" \
             --build-number "${{ steps.version.outputs.build_number }}"
 
+      - name: Verify permanent APK signature for releases
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.signing.outputs.mode }}" != "persistent" ]]; then
+            echo "::error::Refusing to distribute a non-persistently signed APK."
+            exit 1
+          fi
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+
       - name: Prepare versioned files and SHA256
         shell: bash
         run: |
@@ -165,7 +184,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish version to GitHub Releases
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.signing.outputs.mode == 'persistent'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
