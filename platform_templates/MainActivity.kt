@@ -23,12 +23,16 @@ import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
+import android.os.SystemClock
 import java.io.InputStream
 
 // SAF provides an InputStream directly from the selected document, without copying
 // a 2 GB file to app cache. Only one stream may be open at once.
 class MainActivity : FlutterActivity() {
     private val channelName = "userinfo/csv_stream"
+    private val progressChannelName = "userinfo/database_restore_progress"
+    @Volatile private var restoreProgressSink: EventChannel.EventSink? = null
     private val requestCode = 8612
     private val backupRequestCode = 8614
     private val restoreRequestCode = 8615
@@ -48,6 +52,15 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, progressChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    restoreProgressSink = events
+                }
+                override fun onCancel(arguments: Any?) {
+                    restoreProgressSink = null
+                }
+            })
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
                 "exportDatabase" -> {
@@ -270,12 +283,34 @@ class MainActivity : FlutterActivity() {
                         }
                     } else {
                         transferFile.parentFile?.mkdirs()
+                        val total = restoreSourceSize(uri)
+                        val started = SystemClock.elapsedRealtime()
+                        var lastPublished = 0L
+                        var totalCopied = 0L
+                        postRestoreProgress(0, total, 0)
                         (contentResolver.openInputStream(uri)
                             ?: error("Cannot read selected backup")).use { input ->
-                            transferFile.outputStream().buffered(1024 * 1024).use { output ->
-                                input.copyTo(output, 1024 * 1024)
+                            FileOutputStream(transferFile).buffered(1024 * 1024).use { output ->
+                                val block = ByteArray(1024 * 1024)
+                                while (true) {
+                                    val n = input.read(block)
+                                    if (n < 0) break
+                                    if (n == 0) continue
+                                    output.write(block, 0, n)
+                                    totalCopied += n
+                                    val elapsed = SystemClock.elapsedRealtime() - started
+                                    if (elapsed - lastPublished >= 250) {
+                                        lastPublished = elapsed
+                                        postRestoreProgress(totalCopied, total, elapsed)
+                                    }
+                                }
+                                output.flush()
                             }
                         }
+                        postRestoreProgress(
+                            totalCopied, total,
+                            SystemClock.elapsedRealtime() - started)
+                        totalCopied
                     }
                     runOnUiThread { callback.success(copied) }
                 } catch (e: Exception) {
@@ -321,6 +356,35 @@ class MainActivity : FlutterActivity() {
             callback.success(result)
         } catch (e: Exception) {
             callback.error("PICK_FAILED", e.message, null)
+        }
+    }
+
+    /** Document providers can omit SIZE; in that case we show bytes only. */
+    private fun restoreSourceSize(uri: Uri): Long? {
+        try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.SIZE),
+                null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (idx >= 0 && !cursor.isNull(idx)) {
+                        val count = cursor.getLong(idx)
+                        if (count > 0) return count
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Remote providers may not offer a size.
+        }
+        return null
+    }
+
+    private fun postRestoreProgress(copied: Long, total: Long?, elapsedMs: Long) {
+        runOnUiThread {
+            restoreProgressSink?.success(mapOf(
+                "copied" to copied,
+                "total" to total,
+                "elapsedMs" to elapsedMs
+            ))
         }
     }
 

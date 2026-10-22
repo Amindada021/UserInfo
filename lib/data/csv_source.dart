@@ -74,6 +74,13 @@ class CsvSource {
       (await _channel.invokeMethod<int>(
           'exportDatabase', {'path': sqlitePath})) ?? 0;
 
+  /// Native progress events are posted from the Android copy thread at most
+  /// about four times a second; unknown document sizes remain null.
+  Stream<Map<dynamic, dynamic>> get restoreCopyProgress =>
+      const EventChannel('userinfo/database_restore_progress')
+          .receiveBroadcastStream()
+          .map((event) => Map<dynamic, dynamic>.from(event as Map));
+
   Future<int> importDatabase(String stagingPath) async =>
       (await _channel.invokeMethod<int>(
           'importDatabase', {'path': stagingPath})) ?? 0;
