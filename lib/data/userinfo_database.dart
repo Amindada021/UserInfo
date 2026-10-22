@@ -220,7 +220,7 @@ class UserInfoDatabase {
     final tokens = normalized.split(
         RegExp(r'[^a-z0-9\u0621-\u06FF]+'))
         .where((token) => token.isNotEmpty);
-    return tokens.map((token) => '"' + token + '*"').join(' ');
+    return tokens.map((token) => '"$token*"').join(' ');
   }
 
   Future<bool> showFullDetails() async {
