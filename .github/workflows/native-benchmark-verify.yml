@@ -1,0 +1,63 @@
+name: Native benchmark Android compile validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'platform_templates/NativeCsvBenchmark.kt'
+      - 'platform_templates/MainActivity.kt'
+      - 'integration_test/native_vs_flutter_benchmark_test.dart'
+      - '.github/workflows/native-benchmark-verify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-debug-no-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Scaffold benchmark-only Android build
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter create . --platforms=android --org com.amindada021 --no-pub
+          mkdir -p android/app/src/main/kotlin/com/amindada021/userinfo
+          cp platform_templates/MainActivity.kt android/app/src/main/kotlin/com/amindada021/userinfo/MainActivity.kt
+          cp platform_templates/NativeCsvBenchmark.kt android/app/src/main/kotlin/com/amindada021/userinfo/NativeCsvBenchmark.kt
+          cp platform_templates/ImportForegroundService.kt android/app/src/main/kotlin/com/amindada021/userinfo/ImportForegroundService.kt
+          cp platform_templates/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          # Never create a debug APK with the real application's package id.
+          sed -i 's/applicationId = "com.amindada021.userinfo"/applicationId = "com.amindada021.userinfo.benchmark"/' android/app/build.gradle.kts
+          grep -q 'applicationId = "com.amindada021.userinfo.benchmark"' android/app/build.gradle.kts
+          python3 tool/generate_logo.py
+
+      - name: Bundle Persian font
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets/fonts
+          curl -fL --retry 3 -o assets/fonts/Lateef-Regular.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/lateef/Lateef-Regular.ttf
+          curl -fL --retry 3 -o assets/fonts/OFL.txt https://raw.githubusercontent.com/google/fonts/main/ofl/lateef/OFL.txt
+
+      - name: Resolve dependencies and verify Dart
+        shell: bash
+        run: |
+          flutter pub get
+          flutter analyze
+
+      - name: Compile Kotlin benchmark inside isolated Android APK
+        run: flutter build apk --debug
+
+      # Intentionally no APK upload or release: the debug signature is
+      # temporary and must never be distributed to real UserInfo users.
