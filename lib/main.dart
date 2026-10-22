@@ -363,7 +363,7 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 12),
               Expanded(child: ListView(children: [
                 DropdownButtonFormField<String>(
-                  value: selectedBank,
+                  initialValue: selectedBank,
                   decoration: const InputDecoration(labelText: 'بانک'),
                   items: const [
                     DropdownMenuItem(value: '', child: Text('همه بانک‌ها')),

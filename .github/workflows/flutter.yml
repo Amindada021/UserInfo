@@ -25,3 +25,8 @@ jobs:
         run: flutter test
       - name: Build debug APK
         run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userinfo-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error

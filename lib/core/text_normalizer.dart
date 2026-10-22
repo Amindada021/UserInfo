@@ -26,7 +26,9 @@ class TextNormalizer {
     if (value == null) return null;
     final result = value.trim();
     if (result.isEmpty || result.toLowerCase() == 'none' ||
-        result.toLowerCase() == 'null') return null;
+        result.toLowerCase() == 'null') {
+      return null;
+    }
     return result;
   }
 }
