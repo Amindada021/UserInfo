@@ -44,7 +44,7 @@ class UserInfoDatabase {
     final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
     final database = await openDatabase(
       location,
-      version: 5,
+      version: 6,
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // Preserve imported people while irreversibly removing source-file metadata.
@@ -57,6 +57,9 @@ class UserInfoDatabase {
         }
         if (oldVersion < 4) {
           await _setupFavorites(database);
+        }
+        if (oldVersion < 6) {
+          await _setupIdentifiers(database);
         }
         if (oldVersion < 5) {
           await _enableBulkIndexMode(database);
@@ -111,6 +114,7 @@ class UserInfoDatabase {
         await _setupNameIndex(database, existingRecords: false);
         await _setupFavorites(database);
         await _enableBulkIndexMode(database);
+        await _setupIdentifiers(database);
       },
     );
     // Recover if Android terminated the app midway through a bulk import.
@@ -190,6 +194,45 @@ class UserInfoDatabase {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  // A small derived table preserves original identifier strings unchanged.
+  // Populated in the same bounded transactions/cursor as the name index.
+  static String _digitsSql(String column) {
+    var sql = "COALESCE($column, '')";
+    const persian = '۰۱۲۳۴۵۶۷۸۹';
+    const arabic = '٠١٢٣٤٥٦٧٨٩';
+    for (var i = 0; i < 10; i++) {
+      sql = "replace(replace($sql, '${persian[i]}', '$i'), '${arabic[i]}', '$i')";
+    }
+    return 'trim($sql)';
+  }
+
+  Future<void> _setupIdentifiers(DatabaseExecutor executor) async {
+    await executor.execute('CREATE TABLE IF NOT EXISTS record_identifiers ('
+        'record_id INTEGER PRIMARY KEY, mobile TEXT NOT NULL, national TEXT NOT NULL)');
+    await executor.execute('CREATE INDEX IF NOT EXISTS idx_ident_mobile '
+        'ON record_identifiers(mobile, record_id)');
+    await executor.execute('CREATE INDEX IF NOT EXISTS idx_ident_national '
+        'ON record_identifiers(national, record_id)');
+    final mobile = _digitsSql('new.mobile');
+    final national = _digitsSql('new.national_code');
+    await executor.execute('CREATE TRIGGER IF NOT EXISTS identifiers_insert '
+        'AFTER INSERT ON records '
+        "WHEN COALESCE((SELECT value FROM app_settings WHERE key = 'name_index_bulk_mode'), '0') != '1' "
+        'BEGIN INSERT OR REPLACE INTO record_identifiers VALUES(new.id, $mobile, $national); END');
+    await executor.execute('CREATE TRIGGER IF NOT EXISTS identifiers_update '
+        'AFTER UPDATE OF mobile, national_code ON records BEGIN '
+        'INSERT OR REPLACE INTO record_identifiers VALUES(new.id, $mobile, $national); END');
+    await executor.execute('CREATE TRIGGER IF NOT EXISTS identifiers_delete '
+        'BEFORE DELETE ON records BEGIN '
+        'DELETE FROM record_identifiers WHERE record_id = old.id; END');
+    final maxId = Sqflite.firstIntValue(await executor.rawQuery(
+        'SELECT COALESCE(MAX(id), 0) FROM records')) ?? 0;
+    await executor.insert('app_settings', {'key': 'name_index_target', 'value': '$maxId'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await executor.insert('app_settings', {'key': 'name_index_cursor', 'value': '0'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   /// During bulk import, defer costly FTS index inserts to incremental
   /// background backfill. B-tree indexes remain available and consistent.
   Future<void> beginFastImport() async {
@@ -252,24 +295,23 @@ class UserInfoDatabase {
       final status = await database.transaction((tx) async {
         final current = await _readNameIndexStatus(tx);
         if (current.ready) return current;
+        final bulk = await tx.query('app_settings', columns: ['value'],
+            where: 'key = ?', whereArgs: ['name_index_bulk_mode']);
+        if (bulk.isNotEmpty && bulk.first['value'] == '1') return current;
         final rows = await tx.rawQuery(
-          'SELECT id, normalized_name FROM records '
-          'WHERE id > ? AND id <= ? ORDER BY id LIMIT ?',
-          [current.done, current.target, limit],
-        );
-        final batch = tx.batch();
-        for (final row in rows) {
-          batch.rawInsert(
+          'SELECT id FROM records WHERE id > ? AND id <= ? ORDER BY id LIMIT ?',
+          [current.done, current.target, limit]);
+        final next = rows.length < limit ? current.target : rows.last['id'] as int;
+        await PerformanceMetrics.measure('index_backfill_sql', () async {
+          await tx.rawInsert(
             'INSERT OR REPLACE INTO record_name_fts(docid, normalized_name) '
-            'VALUES (?, ?)',
-            [row['id'], row['normalized_name']],
-          );
-        }
-        await PerformanceMetrics.measure('sqlite_batch',
-            () => batch.commit(noResult: true));
-        final next = rows.length < limit
-            ? current.target
-            : rows.last['id'] as int;
+            'SELECT id, normalized_name FROM records WHERE id > ? AND id <= ?',
+            [current.done, next]);
+          await tx.rawInsert(
+            'INSERT OR REPLACE INTO record_identifiers(record_id, mobile, national) '
+            'SELECT id, ${_digitsSql('mobile')}, ${_digitsSql('national_code')} '
+            'FROM records WHERE id > ? AND id <= ?', [current.done, next]);
+        });
         await tx.insert('app_settings',
           {'key': 'name_index_cursor', 'value': next.toString()},
           conflictAlgorithm: ConflictAlgorithm.replace);
@@ -396,19 +438,20 @@ class UserInfoDatabase {
     }
     final query = TextNormalizer.normalize(filters.query);
     if (query.isNotEmpty) {
-      if (filters.searchType == 'name' && _nameIndexReady &&
+      if (filters.searchType == 'name' &&
           nameFtsQuery(query).isNotEmpty) {
         conditions.add('record_name_fts MATCH ?');
         args.add(nameFtsQuery(query));
       } else if (filters.searchType == 'mobile' ||
           filters.searchType == 'national') {
-        // Normalized search digits, raw identifying values remain unchanged.
-        final column = filters.searchType == 'mobile'
-            ? 'mobile' : 'national_code';
-        conditions.add('r.$column LIKE ? ESCAPE \'!\'');
-        args.add('${_escapeLike(query)}%');
+        final column = filters.searchType == 'mobile' ? 'mobile' : 'national';
+        conditions.add('r.id IN (SELECT record_id FROM record_identifiers '
+            'WHERE $column >= ? AND $column < ?)');
+        args.addAll([query, '$query\u{10ffff}']);
+      } else if (filters.searchType == 'name') {
+        conditions.add('0');
       } else {
-        // Match name or surname anywhere, regardless of word order.
+        // Advanced text filters retain explicit substring semantics.
         for (final word in query.split(' ').where((v) => v.isNotEmpty)) {
           conditions.add("r.normalized_name LIKE ? ESCAPE '!'");
           args.add('%${_escapeLike(word)}%');
@@ -456,9 +499,8 @@ class UserInfoDatabase {
   String _from(SearchFilters filters) {
     if (filters.searchType == 'name' &&
         filters.query.trim().isNotEmpty &&
-        _nameIndexReady &&
         nameFtsQuery(filters.query).isNotEmpty) {
-      return 'records r JOIN record_name_fts ON '
+      return 'record_name_fts CROSS JOIN records r ON '
           'record_name_fts.docid = r.id';
     }
     return 'records r';
@@ -473,15 +515,17 @@ class UserInfoDatabase {
   }
 
   Future<List<Map<String, Object?>>> search(
-      SearchFilters filters, {int page = 0, int pageSize = 20}) async {
+      SearchFilters filters, {int? beforeId, int pageSize = 20}) async {
+    if (pageSize < 1 || pageSize > 101) throw ArgumentError('Invalid page size');
     final database = await db;
     final (where, args) = _where(filters);
-    return PerformanceMetrics.measure('search_rows', () => database.rawQuery('''
-      SELECT r.*, EXISTS(SELECT 1 FROM favorites f WHERE f.record_id = r.id) AS is_favorite
-      FROM ${_from(filters)} $where
-      ORDER BY r.id DESC
-      LIMIT ? OFFSET ?
-    ''', [...args, pageSize, page * pageSize]));
+    final from = _from(filters);
+    final order = from.startsWith('record_name_fts') ? 'record_name_fts.docid' : 'r.id';
+    final cursor = beforeId == null ? '' : '${where.isEmpty ? 'WHERE' : 'AND'} $order < ?';
+    return PerformanceMetrics.measure('search_rows', () => database.rawQuery(
+      'SELECT r.*, EXISTS(SELECT 1 FROM favorites f WHERE f.record_id = r.id) AS is_favorite '
+      'FROM $from $where $cursor ORDER BY $order DESC LIMIT ?',
+      [...args, if (beforeId != null) beforeId, pageSize]));
   }
 
   Future<bool> toggleFavorite(int id) async {

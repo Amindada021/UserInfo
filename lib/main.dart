@@ -97,7 +97,9 @@ class _HomePageState extends State<HomePage> {
   Timer? _debounce;
   int _page = 0;
   int _pageSize = 20;
-  int _count = 0;
+  int? _count;
+  bool _hasNext = false;
+  final List<int?> _pageCursors = [null];
   String _bank = '';
   bool _missingMobile = false;
   bool _busy = true;
@@ -147,15 +149,8 @@ class _HomePageState extends State<HomePage> {
     if (_refreshInProgress) return;
     _refreshInProgress = true;
     try {
-      final total = await _database.count(_filter);
-      final rows = await _database.search(
-          _filter, page: _page, pageSize: _pageSize);
-      if (mounted) {
-        setState(() {
-          _count = total;
-          _rows = rows;
-        });
-      }
+      // Refresh through the same generation guard and cursor as typed queries.
+      await _load();
     } catch (_) {
       // A transient concurrent-read failure must not stop the importer.
     } finally {
@@ -216,34 +211,31 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _load({bool resetPage = false}) async {
     if (_maintenanceBusy) return;
-    if (resetPage) _page = 0;
+    if (resetPage) {
+      _page = 0;
+      _pageCursors..clear()..add(null);
+    }
     final generation = ++_searchGeneration;
     final filters = _filter;
-    final requestedPage = _page;
+    final requestedCursor = _pageCursors[_page];
+    final requestedSize = _pageSize;
     if (mounted) setState(() => _busy = true);
     try {
       // Show the first page before performing potentially expensive COUNT.
       // In a 100-million-row DB, even FTS MATCH COUNT may take noticeable time
       // for very broad terms. Stale responses from fast typing are discarded.
       final rows = await _database.search(
-          filters, page: requestedPage, pageSize: _pageSize);
+          filters, beforeId: requestedCursor, pageSize: requestedSize + 1);
       if (generation != _searchGeneration) return;
       if (mounted) {
         setState(() {
-          _rows = rows;
+          _hasNext = rows.length > requestedSize;
+          _rows = rows.take(requestedSize).toList();
+          _count = null;
           _busy = false;
         });
       }
 
-      final count = await _database.count(filters);
-      if (generation != _searchGeneration) return;
-      final lastPage = count == 0 ? 0 : (count - 1) ~/ _pageSize;
-      if (_page > lastPage) {
-        _page = lastPage;
-        _load();
-        return;
-      }
-      if (mounted) setState(() => _count = count);
     } catch (error) {
       if (generation == _searchGeneration) {
         _message('خطا در خواندن نتایج: $error');
@@ -264,6 +256,7 @@ class _HomePageState extends State<HomePage> {
 
   void _onSearchChanged(String value) {
     _debounce?.cancel();
+    ++_searchGeneration;
     _debounce = Timer(const Duration(milliseconds: 350),
         () => _load(resetPage: true));
   }
@@ -982,9 +975,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _pager() {
-    final start = _count == 0 ? 0 : _page * _pageSize + 1;
-    final end = (_page + 1) * _pageSize > _count
-        ? _count : (_page + 1) * _pageSize;
+    final start = _rows.isEmpty ? 0 : _page * _pageSize + 1;
+    final end = _page * _pageSize + _rows.length;
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -993,8 +985,22 @@ class _HomePageState extends State<HomePage> {
           crossAxisAlignment: WrapCrossAlignment.center,
           alignment: WrapAlignment.spaceBetween,
           children: [
-            Text('$start تا $end از $_count',
+            Text('$start تا $end${_count == null ? '' : ' از $_count'}',
                 style: const TextStyle(fontSize: 12)),
+            TextButton(
+              onPressed: _busy ? null : () async {
+                final generation = _searchGeneration;
+                try {
+                  final count = await _database.count(_filter);
+                  if (mounted && generation == _searchGeneration) {
+                    setState(() => _count = count);
+                  }
+                } catch (_) {
+                  _message('شمارش دقیق انجام نشد');
+                }
+              },
+              child: const Text('شمارش دقیق'),
+            ),
             DropdownButton<int>(
               value: _pageSize,
               underline: const SizedBox(),
@@ -1011,7 +1017,7 @@ class _HomePageState extends State<HomePage> {
             ),
             IconButton(
               tooltip: 'صفحه قبل',
-              onPressed: _page > 0 ? () {
+              onPressed: !_busy && _page > 0 ? () {
                 _page--;
                 _load();
               } : null,
@@ -1020,7 +1026,9 @@ class _HomePageState extends State<HomePage> {
             Text('صفحه ${_page + 1}'),
             IconButton(
               tooltip: 'صفحه بعد',
-              onPressed: end < _count ? () {
+              onPressed: !_busy && _hasNext ? () {
+                _pageCursors.removeRange(_page + 1, _pageCursors.length);
+                _pageCursors.add(_rows.last['id'] as int);
                 _page++;
                 _load();
               } : null,
@@ -1144,14 +1152,14 @@ class _HomePageState extends State<HomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('در حال ساخت ایندکس جستجوی نام: '
+                      Text('در حال ساخت ایندکس جستجو: '
                           '${(_indexStatus!.fraction * 100).toStringAsFixed(1)}٪',
                           style: const TextStyle(fontSize: 12)),
                       const SizedBox(height: 5),
                       LinearProgressIndicator(value: _indexStatus!.fraction),
                       const Text(
                         'رکوردهای قبلی حذف نمی‌شوند. تا پایان ایندکس، '
-                        'جستجوی نام ممکن است کند باشد.',
+                        'نتایج جستجو فقط شامل بخش ایندکس‌شده است.',
                         style: TextStyle(fontSize: 11),
                       ),
                     ],
@@ -1210,7 +1218,7 @@ class _HomePageState extends State<HomePage> {
                     ]),
               )),
             Row(children: [
-              Expanded(child: Text('$_count نتیجه',
+              Expanded(child: Text(_count == null ? 'نتایج جستجو' : '$_count نتیجه',
                   style: const TextStyle(fontWeight: FontWeight.bold))),
               TextButton(
                 onPressed: _rows.isEmpty ? null : () => setState(() {
