@@ -28,3 +28,6 @@ samples-*/
 *.jks
 .env
 .DS_Store
+
+# Generated device benchmarks; never commit raw device logs
+benchmark_results/
