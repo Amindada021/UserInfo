@@ -10,6 +10,11 @@ New-Item -ItemType Directory -Force -Path $activityDirectory | Out-Null
 Copy-Item 'platform_templates/MainActivity.kt' (Join-Path $activityDirectory 'MainActivity.kt') -Force
 Copy-Item 'platform_templates/ImportForegroundService.kt' (Join-Path $activityDirectory 'ImportForegroundService.kt') -Force
 Copy-Item 'platform_templates/AndroidManifest.xml' 'android/app/src/main/AndroidManifest.xml' -Force
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+    throw 'Python 3 is required to generate UserInfo brand assets.'
+}
+python tool/generate_logo.py
+if ($LASTEXITCODE -ne 0) { throw 'Logo generation failed' }
 $fontFolder = Join-Path $PWD 'assets/fonts'
 New-Item -ItemType Directory -Force -Path $fontFolder | Out-Null
 Invoke-WebRequest 'https://raw.githubusercontent.com/google/fonts/main/ofl/lateef/Lateef-Regular.ttf' -OutFile (Join-Path $fontFolder 'Lateef-Regular.ttf')

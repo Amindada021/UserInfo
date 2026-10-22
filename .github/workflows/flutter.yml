@@ -38,6 +38,9 @@ jobs:
           cp platform_templates/ImportForegroundService.kt android/app/src/main/kotlin/com/amindada021/userinfo/ImportForegroundService.kt
           cp platform_templates/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
+      - name: Generate UserInfo brand logo and launcher icons
+        run: python3 tool/generate_logo.py
+
       - name: Bundle Persian PDF font and OFL license
         shell: bash
         run: |

@@ -73,7 +73,8 @@ class _PasscodeGateState extends State<PasscodeGate> {
               padding: const EdgeInsets.all(24),
               child: AutofillGroup(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.lock_outline, size: 46),
+                  Image.asset('assets/brand/userinfo_logo.png', width: 92, height: 92,
+                      semanticLabel: 'لوگوی UserInfo'),
                   const SizedBox(height: 16),
                   const Text('ورود به UserInfo',
                       style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),

@@ -186,6 +186,12 @@ class _HomePageState extends State<HomePage> {
     try {
       var status = await _database.nameIndexStatus();
       while (mounted && !status.ready && !_maintenanceBusy) {
+        // Avoid competing for SQLite writes while importing millions of rows.
+        if (_import.busy) {
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+          status = await _database.nameIndexStatus();
+          continue;
+        }
         // Keep each SQLite transaction bounded, so interruption does not
         // discard the indexed part of a 5M or 100M-record database.
         status = await _database.buildNameIndexChunk(limit: 2500);
@@ -1025,8 +1031,17 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('UserInfo',
-            style: TextStyle(fontWeight: FontWeight.w700)),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset('assets/brand/userinfo_logo.png',
+                height: 30, width: 30,
+                semanticLabel: 'لوگوی UserInfo'),
+            const SizedBox(width: 8),
+            const Text('UserInfo',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.file_upload_outlined),
