@@ -117,7 +117,7 @@ class ExportService {
                 ...keys.where((key) =>
                     (records[index][key] ?? '').toString().isNotEmpty)
                   .map((key) => '${labels[key]}: ${records[index][key]}'),
-              ].join('\\n'),
+              ].join('\n'),
               textDirection: pw.TextDirection.rtl,
               style: pw.TextStyle(font: font, fontSize: 11),
             ),
