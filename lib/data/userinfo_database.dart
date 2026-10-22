@@ -702,6 +702,8 @@ class UserInfoDatabase {
     if (!await File(filename).exists()) throw StateError('Backup is missing');
     final testDb = await openDatabase(filename, readOnly: true);
     try {
+      await testDb.execute('PRAGMA cache_size = -16384');
+      await testDb.execute('PRAGMA mmap_size = 67108864');
       final result = await testDb.rawQuery('PRAGMA quick_check');
       if (result.isEmpty || result.first.values.first != 'ok') {
         throw const FormatException('SQLite quick_check failed');
