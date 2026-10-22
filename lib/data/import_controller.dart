@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show ProcessInfo;
 import '../core/performance_metrics.dart';
 
 import 'package:flutter/foundation.dart';
@@ -15,6 +16,18 @@ class ImportCancelled implements Exception {}
 
 class ImportController extends ChangeNotifier {
   ImportController(this.database, this.source);
+
+  /// User-configured target, limited to prevent a gigantic single transaction.
+  static const int defaultBatchRows = 1500;
+  static const int minBatchRows = 500;
+  static const int maxBatchRows = 150000;
+
+  /// A 12-GB phone still has per-app RAM pressure and SQLite transient memory.
+  /// Flush earlier when byte/working-set constraints are reached.
+  static const int maxBufferedCharacters = 32 * 1024 * 1024;
+  static const int rssSafetyLimit = 512 * 1024 * 1024;
+  int batchRows = defaultBatchRows;
+  int maxCommittedBatchRows = 0;
 
   final UserInfoDatabase database;
   final CsvSource source;
@@ -94,6 +107,12 @@ class ImportController extends ChangeNotifier {
 
   Future<void> importDocuments(List<CsvDocument> documents) async {
     if (busy) throw StateError('An import is already active');
+    final configured = int.tryParse(
+        await database.getSetting('import_batch_rows',
+            fallback: '$defaultBatchRows'));
+    batchRows = configured == null
+        ? defaultBatchRows
+        : configured.clamp(minBatchRows, maxBatchRows);
     busy = true;
     PerformanceMetrics.reset();
     final importWatch = Stopwatch()..start();
@@ -109,6 +128,7 @@ class ImportController extends ChangeNotifier {
     passBytes = 0;
     passSize = 0;
     inserted = 0;
+    maxCommittedBatchRows = 0;
     invalidRows = 0;
     failedFiles = 0;
     lastError = null;
@@ -124,7 +144,8 @@ class ImportController extends ChangeNotifier {
       // If this fails, we do not silently skip rows without a trace.
       logLocation = await source.openImportLog();
       logOpen = true;
-      await _log('BEGIN files=${documents.length}', force: true);
+      await _log('BEGIN files=${documents.length} '
+          'batchTarget=$batchRows', force: true);
       // Delay expensive full-text tokenization until the import is over;
       // batches remain durable, and FTS backfill is resumable.
       await database.beginFastImport();
@@ -169,7 +190,8 @@ class ImportController extends ChangeNotifier {
               ? 'پایان با $failedFiles فایل ناقص؛ داده‌ها حفظ شدند'
               : 'ایمپورت کامل شد؛ $invalidRows ردیف خراب رد شد';
       await _log('END inserted=$inserted skipped=$invalidRows '
-          'failedFiles=$failedFiles', force: true);
+          'failedFiles=$failedFiles batchTarget=$batchRows '
+          'maxCommittedBatchRows=$maxCommittedBatchRows', force: true);
     } on ImportCancelled {
       stage = 'ایمپورت لغو شد؛ رکوردهای ثبت‌شده حفظ شدند';
       if (logOpen) {
@@ -368,14 +390,25 @@ class ImportController extends ChangeNotifier {
         if (mapWatch != null) {
           PerformanceMetrics.record('normalize_and_map', mapWatch.elapsedMicroseconds);
         }
-        if (buffer.length >= 1500 || bufferedCharacters >= 2 * 1024 * 1024) {
-          if (rowsInFile % 30000 == 0 && await source.freeBytes() < 64 * 1024 * 1024) {
+        // Requested batch size is a TARGET; the memory guard may flush
+        // earlier on long strings or memory pressure. Committed rows and
+        // the CSV checkpoint are always in the same SQLite transaction.
+        final memoryPressure = buffer.length % 1024 == 0 &&
+            ProcessInfo.currentRss >= rssSafetyLimit;
+        if (buffer.length >= batchRows ||
+            bufferedCharacters >= maxBufferedCharacters ||
+            memoryPressure) {
+          if (await source.freeBytes() < 64 * 1024 * 1024) {
             throw StateError('LOW_STORAGE');
           }
+          final saving = buffer.length;
           await database.insertBatch(fileId, buffer, csvRecord: lastRecord);
-          inserted += buffer.length;
-          PerformanceMetrics.rows += buffer.length;
-          rowsInFile += buffer.length;
+          inserted += saving;
+          PerformanceMetrics.rows += saving;
+          rowsInFile += saving;
+          if (saving > maxCommittedBatchRows) {
+            maxCommittedBatchRows = saving;
+          }
           buffer.clear();
           bufferedCharacters = 0;
           notifyListeners();
@@ -387,10 +420,14 @@ class ImportController extends ChangeNotifier {
         throw const FormatException('CSV معتبر بدون هدر یافت نشد');
       }
       if (buffer.isNotEmpty || lastRecord > committedRecord) {
+        final saving = buffer.length;
         await database.insertBatch(fileId, buffer, csvRecord: lastRecord);
-        inserted += buffer.length;
-          PerformanceMetrics.rows += buffer.length;
-        rowsInFile += buffer.length;
+        inserted += saving;
+        PerformanceMetrics.rows += saving;
+        rowsInFile += saving;
+        if (saving > maxCommittedBatchRows) {
+          maxCommittedBatchRows = saving;
+        }
         buffer.clear();
       }
       if (cancelling) throw ImportCancelled();

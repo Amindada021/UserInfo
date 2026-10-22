@@ -110,6 +110,7 @@ class _HomePageState extends State<HomePage> {
   bool _busy = true;
   bool _showImportSummary = false;
   int _partialRecords = 0;
+  int _batchRows = ImportController.defaultBatchRows;
   bool _indexPauseRequested = false;
   DateTime _lastImportRepaint = DateTime.fromMillisecondsSinceEpoch(0);
   Map<String, String> _fieldFilters = {};
@@ -153,6 +154,13 @@ class _HomePageState extends State<HomePage> {
       await _database.discardInterruptedImports();
       _partialRecords = await _database.partialRecordCount();
       _showFullDetails = await _database.showFullDetails();
+      final configuredBatch = int.tryParse(
+          await _database.getSetting('import_batch_rows',
+              fallback: '${ImportController.defaultBatchRows}'));
+      _batchRows = configuredBatch == null
+          ? ImportController.defaultBatchRows
+          : configuredBatch.clamp(
+              ImportController.minBatchRows, ImportController.maxBatchRows);
       final savedTheme = await _database.getSetting('theme_mode');
       AppAppearance.mode.value =
           savedTheme == 'dark' ? ThemeMode.dark : ThemeMode.light;
@@ -487,6 +495,79 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _changeBatchRows() async {
+    if (_import.busy || _buildingIndex || _maintenanceBusy) {
+      _message('تنظیم Batch فقط خارج از عملیات فعال قابل تغییر است');
+      return;
+    }
+    final controller = TextEditingController(text: '$_batchRows');
+    String? validation;
+    try {
+      final chosen = await showDialog<int>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, updateDialog) => AlertDialog(
+            title: const Text('تعداد رکورد در هر Batch'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('تعداد هدف رکورد در هر تراکنش SQLite را مشخص کن. '
+                    'مقدار بزرگ‌تر ممکن است سرعت را افزایش دهد، اما '
+                    'زمان هر Commit و مصرف RAM هم بیشتر می‌شود.'),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(
+                    labelText: 'تعداد رکورد',
+                    hintText: 'مثلاً 1500، 15000 یا 150000',
+                    errorText: validation,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                const Text('محدوده مجاز: ۵۰۰ تا ۱۵۰٬۰۰۰ رکورد. '
+                    'اگر حجم متن یا مصرف حافظه زیاد شود، '
+                    'دسته زودتر ثبت می‌شود تا برنامه بسته نشود.',
+                    style: TextStyle(fontSize: 12)),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('انصراف'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final value = int.tryParse(controller.text.trim());
+                  if (value == null ||
+                      value < ImportController.minBatchRows ||
+                      value > ImportController.maxBatchRows) {
+                    updateDialog(() => validation =
+                        'عددی بین ۵۰۰ تا ۱۵۰٬۰۰۰ وارد کن');
+                    return;
+                  }
+                  Navigator.pop(dialogContext, value);
+                },
+                child: const Text('ذخیره'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (chosen == null) return;
+      await _database.setSetting('import_batch_rows', '$chosen');
+      if (mounted) setState(() => _batchRows = chosen);
+      _message('Batch روی $chosen رکورد تنظیم شد؛ از ایمپورت بعدی اعمال می‌شود');
+    } catch (error) {
+      _message('ذخیره تنظیمات Batch ناموفق بود: $error');
+    } finally {
+      controller.dispose();
+    }
+  }
+
   Future<void> _openSettings() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -521,6 +602,16 @@ class _HomePageState extends State<HomePage> {
                     'theme_mode', next == ThemeMode.dark ? 'dark' : 'light');
                 AppAppearance.mode.value = next;
                 if (sheetContext.mounted) Navigator.pop(sheetContext);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.tune_outlined),
+              title: const Text('تعداد رکورد هر Batch در ایمپورت'),
+              subtitle: Text('$_batchRows رکورد — مقدار قابل تنظیم'),
+              enabled: !_import.busy && !_buildingIndex && !_maintenanceBusy,
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _changeBatchRows();
               },
             ),
             ListTile(
@@ -1186,6 +1277,7 @@ class _HomePageState extends State<HomePage> {
           Text(_import.currentName, maxLines: 1,
               overflow: TextOverflow.ellipsis),
           Text('فایل ${_import.fileIndex} از ${_import.fileCount} | '
+              'Batch هدف: ${_import.batchRows} | '
               '${_import.inserted} رکورد ثبت‌شده | '
               '${_import.invalidRows} ردیف ناسازگار',
               style: const TextStyle(fontSize: 12)),

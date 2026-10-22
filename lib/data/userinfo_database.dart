@@ -437,27 +437,43 @@ class UserInfoDatabase {
     final database = await db;
     final commitWatch = PerformanceMetrics.enabled ? Stopwatch() : null;
     await PerformanceMetrics.measure('insert_transaction', () => database.transaction((tx) async {
-      final batch = tx.batch();
-      // Bound parameters below Android's conservative 999-variable limit.
-      // Reuse one SQL shape for full groups; avoid 1500 channel operations.
+      // A configurable 150k-row transaction must not become a single
+      // gigantic sqflite Batch / platform-channel payload. Submit bounded
+      // groups INSIDE one SQLite transaction so a crash cannot advance
+      // its CSV checkpoint past committed data.
       if (rows.isNotEmpty) {
         final columns = rows.first.keys.toList(growable: false);
         const legal = {'file_id', 'bank', 'part', 'row_number',
-          'normalized_name', 'normalized_father', 'normalized_city', 'normalized_province',
-          ...allowedFields};
-        if (columns.any((c) => !legal.contains(c))) throw ArgumentError('Invalid insert column');
+          'normalized_name', 'normalized_father', 'normalized_city',
+          'normalized_province', ...allowedFields};
+        if (columns.any((column) => !legal.contains(column))) {
+          throw ArgumentError('Invalid insert column');
+        }
         final groupSize = 900 ~/ columns.length;
+        if (groupSize < 1) throw ArgumentError('Too many columns');
         final tuple = '(${List.filled(columns.length, '?').join(',')})';
-        for (var start = 0; start < rows.length; start += groupSize) {
-          final end = (start + groupSize).clamp(0, rows.length);
-          final group = rows.sublist(start, end);
-          batch.rawInsert('INSERT INTO records(${columns.join(',')}) VALUES '
-              '${List.filled(group.length, tuple).join(',')}',
-              [for (final row in group) for (final column in columns) row[column]]);
+        final sqlPrefix = 'INSERT INTO records(${columns.join(',')}) VALUES ';
+        const maxPlatformBatchRows = 3000;
+        for (var portionStart = 0;
+            portionStart < rows.length;
+            portionStart += maxPlatformBatchRows) {
+          final portionEnd =
+              (portionStart + maxPlatformBatchRows).clamp(0, rows.length);
+          final batch = tx.batch();
+          for (var start = portionStart; start < portionEnd;
+              start += groupSize) {
+            final end = (start + groupSize).clamp(0, portionEnd);
+            final group = rows.sublist(start, end);
+            batch.rawInsert(
+              '$sqlPrefix${List.filled(group.length, tuple).join(',')}',
+              [for (final row in group)
+                for (final column in columns) row[column]],
+            );
+          }
+          await PerformanceMetrics.measure('sqlite_batch',
+              () => batch.commit(noResult: true));
         }
       }
-      await PerformanceMetrics.measure('sqlite_batch',
-          () => batch.commit(noResult: true));
       if (csvRecord != null) {
         await tx.update('import_checkpoints', {'csv_record': csvRecord},
             where: 'file_id = ?', whereArgs: [fileId]);
