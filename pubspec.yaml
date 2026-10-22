@@ -16,7 +16,7 @@ dependencies:
   path_provider: ^2.1.5
   share_plus: ^12.0.2
   cross_file: ^0.3.5
-  archive: ^4.0.9
+  archive: ^3.6.1
   excel: ^4.0.6
   printing: ^5.14.3
   pdf: ^3.12.0

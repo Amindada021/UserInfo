@@ -23,7 +23,7 @@ void main() {
     final zip = ZipDecoder().decodeBytes(bytes);
     final sheet = zip.find('xl/worksheets/sheet1.xml');
     expect(sheet, isNotNull);
-    final sheetXml = utf8.decode(sheet!.readBytes()!);
+    final sheetXml = utf8.decode(sheet!.content as List<int>);
     expect(sheetXml, contains('rightToLeft="1"'));
     final spreadsheet = Excel.decodeBytes(bytes);
     final data = spreadsheet.tables['اطلاعات اشخاص']!.rows;

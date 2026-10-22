@@ -105,14 +105,8 @@ class ExportService {
     final output = Archive();
     var corrected = 0;
     for (final entry in input) {
-      if (!entry.isFile) {
-        output.add(ArchiveFile.directory(entry.name));
-        continue;
-      }
-      final data = entry.readBytes();
-      if (data == null) {
-        throw StateError('فایل Excel ناقص است: ${entry.name}');
-      }
+      if (!entry.isFile) continue;
+      final data = entry.content as List<int>;
       if (RegExp(r'^xl/worksheets/sheet[0-9]+\.xml$')
           .hasMatch(entry.name)) {
         var xml = utf8.decode(data);
@@ -134,15 +128,15 @@ class ExportService {
               '<sheetViews><sheetView workbookViewId="0" rightToLeft="1"/></sheetViews><sheetData');
         }
         corrected++;
-        output.add(ArchiveFile.bytes(entry.name, utf8.encode(xml)));
+        output.add(ArchiveFile(entry.name, utf8.encode(xml).length, utf8.encode(xml)));
       } else {
-        output.add(ArchiveFile.bytes(entry.name, data));
+        output.add(ArchiveFile(entry.name, data.length, data));
       }
     }
     if (corrected == 0) {
       throw StateError('هیچ شیت Excel برای راست‌به‌چپ شدن پیدا نشد');
     }
-    return ZipEncoder().encodeBytes(output);
+    return ZipEncoder().encode(output)!;
   }
 
   Future<void> excel(List<Map<String, Object?>> records,
