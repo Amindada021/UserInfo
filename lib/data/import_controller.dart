@@ -311,6 +311,7 @@ class ImportController extends ChangeNotifier {
       stage = 'خواندن و ذخیره ${_safeName(doc.name)}';
       notifyListeners();
       var header = <String>[];
+      var sourceFieldPositions = <int>[];
       final buffer = <Map<String, Object?>>[];
       var bank = '';
       await _log('FILE_BEGIN index=$fileIndex '
@@ -351,8 +352,16 @@ class ImportController extends ChangeNotifier {
           } else {
             throw const FormatException('هدر CSV شناسایی نشد');
           }
+          // Work out all column positions ONCE, not per imported person.
+          // A 100M-row file must not create an extra header->value Map and
+          // upper-case each of 13 database field names for every record.
+          sourceFieldPositions = [
+            for (final field in UserInfoDatabase.allowedFields)
+              header.indexOf(field.toUpperCase()),
+          ];
           if (fileId == 0) {
-            fileId = await database.beginFile(bank: bank, fingerprint: fingerprint);
+            fileId = await database.beginFile(
+                bank: bank, fingerprint: fingerprint);
           }
           continue;
         }
@@ -368,23 +377,31 @@ class ImportController extends ChangeNotifier {
           continue;
         }
 
-        final mapWatch = PerformanceMetrics.enabled ? (Stopwatch()..start()) : null;
-        final values = <String, String?>{};
-        for (var j = 0; j < header.length; j++) {
-          values[header[j]] = TextNormalizer.cleaned(cells[j]);
+        final mapWatch =
+            PerformanceMetrics.enabled ? (Stopwatch()..start()) : null;
+        final fields = UserInfoDatabase.allowedFields;
+        final values = List<String?>.filled(fields.length, null);
+        for (var j = 0; j < fields.length; j++) {
+          final position = sourceFieldPositions[j];
+          if (position >= 0) {
+            values[j] = TextNormalizer.cleaned(cells[position]);
+          }
         }
-        bufferedCharacters += cells.fold<int>(0, (sum, cell) => sum + cell.length);
+        for (final value in cells) {
+          bufferedCharacters += value.length;
+        }
         buffer.add({
           'file_id': fileId,
           'bank': bank,
           'part': '',
           'row_number': rowNumber,
-          for (final field in UserInfoDatabase.allowedFields)
-            field: values[field.toUpperCase()],
-          'normalized_name': TextNormalizer.normalize(values['FULL_NAME'] ?? ''),
-          'normalized_father': TextNormalizer.normalize(values['FATHER_NAME'] ?? ''),
-          'normalized_city': TextNormalizer.normalize(values['CITY_NAME'] ?? ''),
-          'normalized_province': TextNormalizer.normalize(values['PROVINCE_NAME'] ?? ''),
+          for (var j = 0; j < fields.length; j++) fields[j]: values[j],
+          // Positions in allowedFields: full_name=2, father_name=3,
+          // city_name=6, province_name=7.
+          'normalized_name': TextNormalizer.normalize(values[2] ?? ''),
+          'normalized_father': TextNormalizer.normalize(values[3] ?? ''),
+          'normalized_city': TextNormalizer.normalize(values[6] ?? ''),
+          'normalized_province': TextNormalizer.normalize(values[7] ?? ''),
         });
 
         if (mapWatch != null) {

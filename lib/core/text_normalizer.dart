@@ -5,6 +5,9 @@ class TextNormalizer {
   static final RegExp _spaces = RegExp(r'\s+');
 
   static String normalize(String value) {
+    // Missing father/city/province fields are common in Bank Melli CSVs.
+    // Avoid 20+ replacements and regex scans for each empty field.
+    if (value.isEmpty) return '';
     final watch = PerformanceMetrics.enabled ? (Stopwatch()..start()) : null;
     var normalized = value
         .replaceAll('ي', 'ی')
