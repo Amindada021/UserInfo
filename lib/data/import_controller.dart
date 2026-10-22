@@ -145,8 +145,8 @@ class ImportController extends ChangeNotifier {
       stage = cancelling
           ? 'لغو شد؛ داده‌های ذخیره‌شده حفظ شدند'
           : failedFiles > 0
-              ? 'پایان با ${failedFiles} فایل ناقص؛ داده‌ها حفظ شدند'
-              : 'ایمپورت کامل شد؛ ${invalidRows} ردیف خراب رد شد';
+              ? 'پایان با $failedFiles فایل ناقص؛ داده‌ها حفظ شدند'
+              : 'ایمپورت کامل شد؛ $invalidRows ردیف خراب رد شد';
       await _log('END inserted=$inserted skipped=$invalidRows '
           'failedFiles=$failedFiles', force: true);
     } on ImportCancelled {
