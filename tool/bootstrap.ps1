@@ -8,6 +8,7 @@ if ($LASTEXITCODE -ne 0) { throw 'flutter create failed' }
 $activityDirectory = Join-Path $PWD 'android/app/src/main/kotlin/com/amindada021/userinfo'
 New-Item -ItemType Directory -Force -Path $activityDirectory | Out-Null
 Copy-Item 'platform_templates/MainActivity.kt' (Join-Path $activityDirectory 'MainActivity.kt') -Force
+Copy-Item 'platform_templates/NativeCsvBenchmark.kt' (Join-Path $activityDirectory 'NativeCsvBenchmark.kt') -Force
 Copy-Item 'platform_templates/ImportForegroundService.kt' (Join-Path $activityDirectory 'ImportForegroundService.kt') -Force
 Copy-Item 'platform_templates/AndroidManifest.xml' 'android/app/src/main/AndroidManifest.xml' -Force
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {

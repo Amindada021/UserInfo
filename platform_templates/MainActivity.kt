@@ -63,6 +63,27 @@ class MainActivity : FlutterActivity() {
             })
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
+                "runNativeCsvBenchmark" -> {
+                    val csvPath = call.argument<String>("csvPath") ?: ""
+                    val dbPath = call.argument<String>("dbPath") ?: ""
+                    val fileId = call.argument<Int>("fileId") ?: 0
+                    val rows = call.argument<Int>("rows") ?: 0
+                    val batch = call.argument<Int>("batch") ?: 0
+                    ioExecutor.execute {
+                        try {
+                            val metrics = NativeCsvBenchmark.run(
+                                applicationContext, csvPath, dbPath,
+                                fileId, batch, rows
+                            )
+                            runOnUiThread { result.success(metrics) }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                result.error("NATIVE_BENCH_FAILED",
+                                    error.javaClass.simpleName, null)
+                            }
+                        }
+                    }
+                }
                 "setKeepScreenOn" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: false
                     // FLAG_KEEP_SCREEN_ON overrides the normal screen timeout
