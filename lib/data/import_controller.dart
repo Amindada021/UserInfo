@@ -102,12 +102,17 @@ class ImportController extends ChangeNotifier {
 
     var logOpen = false;
     var protectionStarted = false;
+    var fastImportStarted = false;
     try {
       // Create an actual Android Downloads TXT before processing data.
       // If this fails, we do not silently skip rows without a trace.
       logLocation = await source.openImportLog();
       logOpen = true;
       await _log('BEGIN files=${documents.length}', force: true);
+      // Delay expensive full-text tokenization until the import is over;
+      // batches remain durable, and FTS backfill is resumable.
+      await database.beginFastImport();
+      fastImportStarted = true;
       try {
         await source.protectImport(true);
         protectionStarted = true;
@@ -168,6 +173,13 @@ class ImportController extends ChangeNotifier {
           await source.closeImportLog();
         } catch (error) {
           lastError = 'خطا در بستن گزارش: ${_safeReason(error)}';
+        }
+      }
+      if (fastImportStarted) {
+        try {
+          await database.finishFastImport();
+        } catch (error) {
+          lastError = 'ثبت مجدد ایندکس جستجو ناموفق بود: ${_safeReason(error)}';
         }
       }
       if (protectionStarted) {
@@ -290,7 +302,7 @@ class ImportController extends ChangeNotifier {
           'normalized_province': TextNormalizer.normalize(values['PROVINCE_NAME'] ?? ''),
         });
 
-        if (buffer.length >= 250) {
+        if (buffer.length >= 1500) {
           await database.insertBatch(fileId, buffer);
           inserted += buffer.length;
           rowsInFile += buffer.length;
