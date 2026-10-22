@@ -43,7 +43,7 @@ class UserInfoDatabase {
     final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
     final database = await openDatabase(
       location,
-      version: 4,
+      version: 5,
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // Preserve imported people while irreversibly removing source-file metadata.
@@ -56,6 +56,9 @@ class UserInfoDatabase {
         }
         if (oldVersion < 4) {
           await _setupFavorites(database);
+        }
+        if (oldVersion < 5) {
+          await _enableBulkIndexMode(database);
         }
       },
       onConfigure: (database) async {
@@ -106,8 +109,27 @@ class UserInfoDatabase {
         await database.execute('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
         await _setupNameIndex(database, existingRecords: false);
         await _setupFavorites(database);
+        await _enableBulkIndexMode(database);
       },
     );
+    // Recover if Android terminated the app midway through a bulk import.
+    final bulkMode = await database.query('app_settings',
+        columns: ['value'], where: 'key = ?',
+        whereArgs: ['name_index_bulk_mode'], limit: 1);
+    if (bulkMode.isNotEmpty && bulkMode.first['value'] == '1') {
+      // Use the already-open handle, never the db getter during _open().
+      final lastId = Sqflite.firstIntValue(await database.rawQuery(
+          'SELECT COALESCE(MAX(id), 0) FROM records')) ?? 0;
+      final status = await _readNameIndexStatus(database);
+      if (lastId > status.target) {
+        await database.insert('app_settings',
+            {'key': 'name_index_target', 'value': lastId.toString()},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await database.insert('app_settings',
+          {'key': 'name_index_bulk_mode', 'value': '0'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
     _nameIndexReady = (await _readNameIndexStatus(database)).ready;
     return database;
   }
@@ -121,8 +143,10 @@ class UserInfoDatabase {
       'USING fts4(normalized_name, tokenize=unicode61, order=DESC)');
     await executor.execute(
       'CREATE TRIGGER IF NOT EXISTS record_name_fts_insert '
-      'AFTER INSERT ON records BEGIN '
-      'INSERT INTO record_name_fts(docid, normalized_name) '
+      'AFTER INSERT ON records '
+      "WHEN COALESCE((SELECT value FROM app_settings "
+      "WHERE key = 'name_index_bulk_mode'), '0') != '1' "
+      'BEGIN INSERT INTO record_name_fts(docid, normalized_name) '
       'VALUES (new.id, new.normalized_name); END');
     await executor.execute(
       'CREATE TRIGGER IF NOT EXISTS record_name_fts_delete '
@@ -149,6 +173,49 @@ class UserInfoDatabase {
   Future<void> _setupFavorites(DatabaseExecutor executor) async {
     await executor.execute('CREATE TABLE IF NOT EXISTS favorites ('
         'record_id INTEGER PRIMARY KEY REFERENCES records(id) ON DELETE CASCADE)');
+  }
+
+  Future<void> _enableBulkIndexMode(DatabaseExecutor db) async {
+    // Drop/reinstall on schema upgrade so v4 databases also honor bulk mode.
+    await db.execute('DROP TRIGGER IF EXISTS record_name_fts_insert');
+    await db.execute(
+      'CREATE TRIGGER record_name_fts_insert AFTER INSERT ON records '
+      "WHEN COALESCE((SELECT value FROM app_settings "
+      "WHERE key = 'name_index_bulk_mode'), '0') != '1' "
+      'BEGIN INSERT INTO record_name_fts(docid, normalized_name) '
+      'VALUES (new.id, new.normalized_name); END');
+    await db.insert('app_settings',
+        {'key': 'name_index_bulk_mode', 'value': '0'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// During bulk import, defer costly FTS index inserts to incremental
+  /// background backfill. B-tree indexes remain available and consistent.
+  Future<void> beginFastImport() async {
+    final database = await db;
+    await database.insert('app_settings',
+        {'key': 'name_index_bulk_mode', 'value': '1'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    _nameIndexReady = false;
+  }
+
+  /// Make the exact upper bound durable, then restore FTS trigger operation.
+  Future<void> finishFastImport() async {
+    final database = await db;
+    final lastId = Sqflite.firstIntValue(await database.rawQuery(
+        'SELECT COALESCE(MAX(id), 0) FROM records')) ?? 0;
+    await database.transaction((tx) async {
+      final status = await _readNameIndexStatus(tx);
+      if (lastId > status.target) {
+        await tx.insert('app_settings',
+            {'key': 'name_index_target', 'value': lastId.toString()},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await tx.insert('app_settings',
+          {'key': 'name_index_bulk_mode', 'value': '0'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+    _nameIndexReady = (await _readNameIndexStatus(database)).ready;
   }
 
   Future<NameIndexStatus> _readNameIndexStatus(
