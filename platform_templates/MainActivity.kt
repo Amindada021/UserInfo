@@ -30,6 +30,10 @@ import java.io.InputStream
 class MainActivity : FlutterActivity() {
     private val channelName = "userinfo/csv_stream"
     private val requestCode = 8612
+    private val backupRequestCode = 8614
+    private val restoreRequestCode = 8615
+    private var pendingDatabaseTransfer: MethodChannel.Result? = null
+    private var pendingDatabasePath: String? = null
     private var pendingPicker: MethodChannel.Result? = null
     private var currentStream: InputStream? = null
     private var importLog: OutputStream? = null
@@ -46,6 +50,34 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
+                "exportDatabase" -> {
+                    if (pendingDatabaseTransfer != null) {
+                        result.error("BUSY", "A database transfer is already open", null)
+                    } else {
+                        pendingDatabaseTransfer = result
+                        pendingDatabasePath = call.argument<String>("path")
+                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "application/octet-stream"
+                            putExtra(Intent.EXTRA_TITLE, "UserInfo-backup.sqlite")
+                        }
+                        startActivityForResult(intent, backupRequestCode)
+                    }
+                }
+                "importDatabase" -> {
+                    if (pendingDatabaseTransfer != null) {
+                        result.error("BUSY", "A database transfer is already open", null)
+                    } else {
+                        pendingDatabaseTransfer = result
+                        pendingDatabasePath = call.argument<String>("path")
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivityForResult(intent, restoreRequestCode)
+                    }
+                }
                 "pick" -> {
                     if (pendingPicker != null) {
                         result.error("BUSY", "Document picker is already open", null)
@@ -203,6 +235,48 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Deprecated API is used for compatibility with FlutterActivity")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == backupRequestCode ||
+            requestCode == restoreRequestCode) {
+            val callback = pendingDatabaseTransfer
+            val transferPath = pendingDatabasePath
+            pendingDatabaseTransfer = null
+            pendingDatabasePath = null
+            if (callback == null || transferPath == null) return
+            if (resultCode != Activity.RESULT_OK || data?.data == null) {
+                callback.error("CANCELLED", "Document selection cancelled", null)
+                return
+            }
+            val uri = data.data!!
+            ioExecutor.execute {
+                try {
+                    val transferFile = File(transferPath)
+                    if (requestCode == backupRequestCode &&
+                        !transferFile.isFile) {
+                        error("SQLite source is missing")
+                    }
+                    val copied = if (requestCode == backupRequestCode) {
+                        transferFile.inputStream().buffered(1024 * 1024).use { input ->
+                            (contentResolver.openOutputStream(uri, "w")
+                                ?: error("Cannot write selected destination")).use { output ->
+                                input.copyTo(output, 1024 * 1024)
+                            }
+                        }
+                    } else {
+                        transferFile.parentFile?.mkdirs()
+                        (contentResolver.openInputStream(uri)
+                            ?: error("Cannot read selected backup")).use { input ->
+                            transferFile.outputStream().buffered(1024 * 1024).use { output ->
+                                input.copyTo(output, 1024 * 1024)
+                            }
+                        }
+                    }
+                    runOnUiThread { callback.success(copied) }
+                } catch (e: Exception) {
+                    runOnUiThread { callback.error("TRANSFER_FAILED", e.message, null) }
+                }
+            }
+            return
+        }
         if (requestCode != this.requestCode) return
         val callback = pendingPicker ?: return
         pendingPicker = null
