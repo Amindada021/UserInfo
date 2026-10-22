@@ -64,6 +64,16 @@ class MainActivity : FlutterActivity() {
                         result.error("READ_FAILED", e.message, null)
                     }
                 }
+                "pdfFont" -> {
+                    val paths = listOf(
+                        "/system/fonts/NotoNaskhArabic-Regular.ttf",
+                        "/system/fonts/NotoNaskhArabicUI-Regular.ttf",
+                        "/system/fonts/NotoSansArabic-Regular.ttf",
+                        "/system/fonts/NotoSansArabicUI-Regular.ttf"
+                    )
+                    val font = paths.map { java.io.File(it) }.firstOrNull { it.canRead() }
+                    result.success(font?.readBytes())
+                }
                 "close" -> {
                     try { currentStream?.close() } finally { currentStream = null }
                     result.success(true)
