@@ -38,9 +38,28 @@ $args = @(
     "--dart-define=USERINFO_NATIVE_COMPARE_ROWS=$Rows",
     "--dart-define=USERINFO_NATIVE_COMPARE_BATCH=$Batch"
 )
-& flutter @args 2>&1 | Tee-Object -FilePath $log
-if ($LASTEXITCODE -ne 0) { throw "Benchmark failed: $log" }
-if (-not (Select-String -Path $log -Pattern 'USERINFO_NATIVE_COMPARE_RESULT' -Quiet)) {
-    throw "No benchmark result in $log"
+# CRITICAL: isolate the benchmark from the user's installed UserInfo APK.
+# Flutter integration tests otherwise may try to install/re-sign that package.
+# A separate applicationId guarantees the real SQLite user data is untouched.
+$gradlePath = Join-Path $PWD 'android/app/build.gradle.kts'
+$originalGradle = [IO.File]::ReadAllText($gradlePath)
+$prodId = 'applicationId = "com.amindada021.userinfo"'
+$testId = 'applicationId = "com.amindada021.userinfo.benchmark"'
+if (-not $originalGradle.Contains($prodId)) {
+    throw 'Cannot guarantee a separate package ID; refusing to run benchmark.'
+}
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+try {
+    $testGradle = $originalGradle.Replace($prodId, $testId)
+    [IO.File]::WriteAllText($gradlePath, $testGradle, $utf8)
+    Write-Host 'Using isolated Android package: com.amindada021.userinfo.benchmark' -ForegroundColor Yellow
+    & flutter @args 2>&1 | Tee-Object -FilePath $log
+    if ($LASTEXITCODE -ne 0) { throw "Benchmark failed: $log" }
+    if (-not (Select-String -Path $log -Pattern 'USERINFO_NATIVE_COMPARE_RESULT' -Quiet)) {
+        throw "No benchmark result in $log"
+    }
+} finally {
+    # Restore the production build configuration regardless of test outcome.
+    [IO.File]::WriteAllText($gradlePath, $originalGradle, $utf8)
 }
 Write-Host "Result saved: $log" -ForegroundColor Green
