@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'package:share_plus/share_plus.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'data/csv_source.dart';
+import 'data/database_transfer_service.dart';
+import 'security/passcode_gate.dart';
 import 'data/export_service.dart';
 import 'data/import_controller.dart';
 import 'data/userinfo_database.dart';
@@ -20,7 +25,9 @@ class UserInfoApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const green = Color(0xFF12685C);
-    return MaterialApp(
+    return AnimatedBuilder(
+      animation: AppAppearance.mode,
+      builder: (context, _) => MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'UserInfo',
       locale: const Locale('fa'),
@@ -44,10 +51,22 @@ class UserInfoApp extends StatelessWidget {
           ),
         ),
       ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+            seedColor: green, brightness: Brightness.dark),
+        scaffoldBackgroundColor: const Color(0xFF121B1B),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        ),
+      ),
+      themeMode: AppAppearance.mode.value,
       builder: (context, child) =>
           Directionality(textDirection: TextDirection.rtl, child: child!),
-      home: const HomePage(),
-    );
+      home: const PasscodeGate(child: HomePage()),
+    ));
   }
 }
 
@@ -61,6 +80,8 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final UserInfoDatabase _database = UserInfoDatabase();
   final CsvSource _source = CsvSource();
+  late final DatabaseTransferService _transfer =
+      DatabaseTransferService(_database, _source);
   final TextEditingController _search = TextEditingController();
   late final ImportController _import = ImportController(_database, _source);
   late final ExportService _export = ExportService();
@@ -68,6 +89,11 @@ class _HomePageState extends State<HomePage> {
   List<Map<String, Object?>> _rows = const [];
   final Set<int> _selected = {};
   bool _showFullDetails = false;
+  bool _favoritesOnly = false;
+  bool _maintenanceBusy = false;
+  bool _buildingIndex = false;
+  NameIndexStatus? _indexStatus;
+  String? _indexError;
   String _searchType = 'name';
   Timer? _debounce;
   int _page = 0;
@@ -88,6 +114,7 @@ class _HomePageState extends State<HomePage> {
   SearchFilters get _filter => SearchFilters(
         query: _search.text,
         searchType: _searchType,
+        favoritesOnly: _favoritesOnly,
         bank: _bank,
         fields: _fieldFilters,
         missingMobile: _missingMobile,
@@ -142,14 +169,46 @@ class _HomePageState extends State<HomePage> {
       await _database.discardInterruptedImports();
       _partialRecords = await _database.partialRecordCount();
       _showFullDetails = await _database.showFullDetails();
+      final savedTheme = await _database.getSetting('theme_mode');
+      AppAppearance.mode.value =
+          savedTheme == 'dark' ? ThemeMode.dark : ThemeMode.light;
+      _indexStatus = await _database.nameIndexStatus();
       await _load();
+      _buildNameIndex();
     } catch (error) {
       _message('خطای راه‌اندازی دیتابیس: $error');
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  Future<void> _buildNameIndex() async {
+    if (_buildingIndex || _maintenanceBusy) return;
+    _buildingIndex = true;
+    try {
+      var status = await _database.nameIndexStatus();
+      while (mounted && !status.ready && !_maintenanceBusy) {
+        // Keep each SQLite transaction bounded, so interruption does not
+        // discard the indexed part of a 5M or 100M-record database.
+        status = await _database.buildNameIndexChunk(limit: 2500);
+        if (mounted) setState(() => _indexStatus = status);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      if (mounted && status.ready) {
+        setState(() {
+          _indexStatus = status;
+          _indexError = null;
+        });
+        await _load(resetPage: true);
+      }
+    } catch (error) {
+      if (mounted) setState(() => _indexError = error.toString());
+    } finally {
+      _buildingIndex = false;
+    }
+  }
+
   Future<void> _load({bool resetPage = false}) async {
+    if (_maintenanceBusy) return;
     if (resetPage) _page = 0;
     if (mounted) setState(() => _busy = true);
     try {
