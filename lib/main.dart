@@ -581,6 +581,8 @@ class _HomePageState extends State<HomePage> {
       _restoreProgress = const RestoreProgress(stage: RestoreStage.selecting);
     });
     await _safeKeepScreenOn(true);
+    Object? restoreError;
+    var failedStage = RestoreStage.selecting;
     try {
       await _transfer.restoreDatabase(onProgress: (progress) {
         if (mounted) setState(() => _restoreProgress = progress);
@@ -591,7 +593,8 @@ class _HomePageState extends State<HomePage> {
       await _loadAfterRestore();
       _message('دیتابیس از بکاپ بازیابی شد');
     } catch (error) {
-      _message('بازیابی انجام نشد: $error');
+      restoreError = error;
+      failedStage = _restoreProgress?.stage ?? RestoreStage.selecting;
     } finally {
       await _safeKeepScreenOn(false);
       _restoreTicker?.cancel();
@@ -605,6 +608,40 @@ class _HomePageState extends State<HomePage> {
         await _load(resetPage: true);
         _buildNameIndex();
       }
+    }
+    if (restoreError != null && mounted) {
+      if (restoreError is PlatformException &&
+          restoreError.code == 'CANCELLED') return;
+      final stage = switch (failedStage) {
+        RestoreStage.selecting => 'انتخاب و آماده‌سازی فایل',
+        RestoreStage.copying => 'کپی بکاپ به حافظه برنامه',
+        RestoreStage.checking => 'بررسی سلامت فایل SQLite',
+        RestoreStage.replacing => 'جایگزینی دیتابیس',
+        RestoreStage.complete => 'بازکردن دیتابیس بازیابی‌شده',
+      };
+      final details = 'مرحله: $stage\nعلت: $restoreError';
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('خطا در بازیابی دیتابیس'),
+          content: SingleChildScrollView(child: SelectableText(details)),
+          actions: [
+            TextButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: details));
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+                _message('جزئیات خطا کپی شد');
+              },
+              icon: const Icon(Icons.copy_outlined),
+              label: const Text('کپی خطا'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('بستن'),
+            ),
+          ],
+        ),
+      );
     }
   }
 
