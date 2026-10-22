@@ -73,7 +73,17 @@ class ExportService {
     }
     final font = pw.Font.ttf(ByteData.sublistView(fontBytes));
     final document = pw.Document();
-    final rows = _table(records, sensitive: sensitive);
+    // Wide PDFs with all 15 fields are unreadable on A4. XLSX includes all fields;
+    // PDF includes the six most relevant columns when sensitive export is enabled.
+    final rows = sensitive
+        ? [
+            ['نام کامل', 'بانک', 'کد ملی', 'شماره کارت', 'موبایل', 'تاریخ تولد'],
+            for (final row in records) [
+              for (final key in ['full_name','bank','national_code',
+                  'card_no','mobile','birth_date']) (row[key] ?? '').toString(),
+            ],
+          ]
+        : _table(records, sensitive: false);
     document.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       textDirection: pw.TextDirection.rtl,

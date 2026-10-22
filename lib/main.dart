@@ -199,11 +199,32 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _copySelection() async {
     if (_selected.isEmpty) return;
+    final sensitive = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('کپی افراد انتخاب‌شده'),
+        content: const Text('فقط نام و بانک کپی شود یا تمام فیلدهای افراد؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('اطلاعات اصلی')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('تمام اطلاعات')),
+        ],
+      ),
+    );
+    if (sensitive == null) return;
+    if (sensitive && !await _confirmSensitive()) return;
     try {
       final rows = await _database.byIds(_selected);
-      final text = rows.map((row) =>
-          '${row['full_name'] ?? 'بدون نام'} | بانک ${row['bank']} | ${row['part']}'
-      ).join('\n');
+      final keys = sensitive
+          ? ExportService.fullColumns : ExportService.safeColumns;
+      final text = rows.map((row) => [
+        for (final key in keys)
+          if (row[key] != null && row[key].toString().isNotEmpty)
+            '${ExportService.labels[key]}: ${row[key]}',
+      ].join('\n')).join('\n---------------\n');
       await Clipboard.setData(ClipboardData(text: text));
       _message('${rows.length} رکورد کپی شد');
     } catch (error) {
@@ -318,7 +339,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _openFilters() async {
     final controllers = {
       for (final entry in ExportService.labels.entries)
-        if (UserInfoDatabase.allowedFields.contains(entry.key))
+        if (UserInfoDatabase.allowedFields.contains(entry.key) || entry.key == 'part')
           entry.key: TextEditingController(
               text: _fieldFilters[entry.key] ?? ''),
     };

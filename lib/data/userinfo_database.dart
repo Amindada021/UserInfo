@@ -164,7 +164,7 @@ class UserInfoDatabase {
       args.add('${TextNormalizer.normalize(filters.query)}%');
     }
     for (final entry in filters.fields.entries) {
-      if (!allowedFields.contains(entry.key) || entry.value.trim().isEmpty) {
+      if (!(allowedFields.contains(entry.key) || entry.key == 'part') || entry.value.trim().isEmpty) {
         continue;
       }
       final value = TextNormalizer.normalize(entry.value);

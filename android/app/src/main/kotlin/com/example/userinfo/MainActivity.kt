@@ -19,6 +19,7 @@ class MainActivity : FlutterActivity() {
     private val requestCode = 8612
     private var pendingPicker: MethodChannel.Result? = null
     private var currentStream: InputStream? = null
+    private val ioExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,13 +56,17 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "read" -> {
-                    try {
-                        val stream = currentStream ?: error("No input stream")
-                        val buffer = ByteArray(256 * 1024)
-                        val count = stream.read(buffer)
-                        result.success(if (count < 0) null else buffer.copyOf(count))
-                    } catch (e: Exception) {
-                        result.error("READ_FAILED", e.message, null)
+                    ioExecutor.execute {
+                        try {
+                            val stream = currentStream ?: error("No input stream")
+                            val buffer = ByteArray(256 * 1024)
+                            val count = stream.read(buffer)
+                            runOnUiThread {
+                                result.success(if (count < 0) null else buffer.copyOf(count))
+                            }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("READ_FAILED", e.message, null) }
+                        }
                     }
                 }
                 "pdfFont" -> {
@@ -128,6 +133,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         currentStream?.close()
+        ioExecutor.shutdownNow()
         super.onDestroy()
     }
 }

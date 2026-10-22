@@ -40,8 +40,9 @@ class ImportController extends ChangeNotifier {
     busy = true;
     cancelling = false;
     fileCount = documents.length;
-    totalBytes = documents.fold<int>(
-        0, (sum, item) => sum + (item.size ?? 0));
+    totalBytes = documents.every((item) => item.size != null && item.size! > 0)
+        ? documents.fold<int>(0, (sum, item) => sum + item.size!)
+        : 0;
     readBytes = 0;
     inserted = 0;
     invalidRows = 0;
