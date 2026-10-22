@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import '../core/performance_metrics.dart';
 
 class CsvDocument {
   const CsvDocument({required this.uri, required this.name, this.size});
@@ -32,7 +33,8 @@ class CsvSource {
       _channel.invokeMethod<void>('open', {'uri': document.uri});
 
   Future<Uint8List?> read() async =>
-      _channel.invokeMethod<Uint8List>('read');
+      PerformanceMetrics.measure('saf_channel_read',
+          () => _channel.invokeMethod<Uint8List>('read'));
 
 
   /// Keep a foreground Android service active for long-running imports.

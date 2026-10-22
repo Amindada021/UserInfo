@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import '../core/performance_metrics.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
@@ -84,6 +86,8 @@ class ImportController extends ChangeNotifier {
   Future<void> importDocuments(List<CsvDocument> documents) async {
     if (busy) throw StateError('An import is already active');
     busy = true;
+    PerformanceMetrics.reset();
+    final importWatch = Stopwatch()..start();
     cancelling = false;
     fileCount = documents.length;
     fileIndex = 0;
@@ -164,6 +168,10 @@ class ImportController extends ChangeNotifier {
       stage = 'ایمپورت متوقف شد؛ رکوردهای ثبت‌شده حفظ شدند';
     } finally {
       if (logOpen) {
+        if (PerformanceMetrics.enabled) {
+          PerformanceMetrics.record('import_total', importWatch.elapsedMicroseconds);
+          await _log('PERF ${jsonEncode(PerformanceMetrics.snapshot())}', force: true);
+        }
         try {
           await _flushLog();
         } catch (error) {
@@ -212,6 +220,7 @@ class ImportController extends ChangeNotifier {
       final Uint8List? chunk = await source.read();
       if (chunk == null) break;
       readBytes += chunk.length;
+      PerformanceMetrics.bytes += chunk.length;
       if (readBytes % (1024 * 1024) < chunk.length) notifyListeners();
       await _notifyAndroidProgress();
       yield chunk;
@@ -285,6 +294,7 @@ class ImportController extends ChangeNotifier {
           continue;
         }
 
+        final mapWatch = PerformanceMetrics.enabled ? (Stopwatch()..start()) : null;
         final values = <String, String?>{};
         for (var j = 0; j < header.length; j++) {
           values[header[j]] = TextNormalizer.cleaned(cells[j]);
@@ -302,9 +312,13 @@ class ImportController extends ChangeNotifier {
           'normalized_province': TextNormalizer.normalize(values['PROVINCE_NAME'] ?? ''),
         });
 
+        if (mapWatch != null) {
+          PerformanceMetrics.record('normalize_and_map', mapWatch.elapsedMicroseconds);
+        }
         if (buffer.length >= 1500) {
           await database.insertBatch(fileId, buffer);
           inserted += buffer.length;
+          PerformanceMetrics.rows += buffer.length;
           rowsInFile += buffer.length;
           buffer.clear();
           notifyListeners();
@@ -317,6 +331,7 @@ class ImportController extends ChangeNotifier {
       if (buffer.isNotEmpty) {
         await database.insertBatch(fileId, buffer);
         inserted += buffer.length;
+          PerformanceMetrics.rows += buffer.length;
         rowsInFile += buffer.length;
         buffer.clear();
       }

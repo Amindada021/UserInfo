@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../core/performance_metrics.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 import '../core/text_normalizer.dart';
@@ -264,7 +265,8 @@ class UserInfoDatabase {
             [row['id'], row['normalized_name']],
           );
         }
-        await batch.commit(noResult: true);
+        await PerformanceMetrics.measure('sqlite_batch',
+            () => batch.commit(noResult: true));
         final next = rows.length < limit
             ? current.target
             : rows.last['id'] as int;
@@ -349,7 +351,8 @@ class UserInfoDatabase {
       for (final row in rows) {
         batch.insert('records', row);
       }
-      await batch.commit(noResult: true);
+      await PerformanceMetrics.measure('sqlite_batch',
+            () => batch.commit(noResult: true));
       await tx.rawUpdate(
           'UPDATE files SET imported_count = imported_count + ? WHERE id = ?',
           [rows.length, fileId]);
@@ -464,8 +467,8 @@ class UserInfoDatabase {
   Future<int> count(SearchFilters filters) async {
     final database = await db;
     final (where, args) = _where(filters);
-    final result = await database.rawQuery(
-        'SELECT COUNT(*) AS count FROM ${_from(filters)} $where', args);
+    final result = await PerformanceMetrics.measure('search_count', () => database.rawQuery(
+        'SELECT COUNT(*) AS count FROM ${_from(filters)} $where', args));
     return (result.first['count'] as num).toInt();
   }
 
@@ -473,12 +476,12 @@ class UserInfoDatabase {
       SearchFilters filters, {int page = 0, int pageSize = 20}) async {
     final database = await db;
     final (where, args) = _where(filters);
-    return database.rawQuery('''
+    return PerformanceMetrics.measure('search_rows', () => database.rawQuery('''
       SELECT r.*, EXISTS(SELECT 1 FROM favorites f WHERE f.record_id = r.id) AS is_favorite
       FROM ${_from(filters)} $where
       ORDER BY r.id DESC
       LIMIT ? OFFSET ?
-    ''', [...args, pageSize, page * pageSize]);
+    ''', [...args, pageSize, page * pageSize]));
   }
 
   Future<bool> toggleFavorite(int id) async {
