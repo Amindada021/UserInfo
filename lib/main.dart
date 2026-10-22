@@ -77,6 +77,10 @@ class _HomePageState extends State<HomePage> {
   bool _missingMobile = false;
   bool _busy = true;
   bool _showImportSummary = false;
+  int _partialRecords = 0;
+  bool _refreshInProgress = false;
+  DateTime _lastImportRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  int _lastImportRefreshCount = 0;
   Map<String, String> _fieldFilters = {};
   String _birthFrom = '';
   String _birthTo = '';
@@ -99,12 +103,44 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onImportChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    final now = DateTime.now();
+    if (_import.busy &&
+        _import.inserted - _lastImportRefreshCount >= 2500 &&
+        now.difference(_lastImportRefresh) >= const Duration(seconds: 6)) {
+      _lastImportRefresh = now;
+      _lastImportRefreshCount = _import.inserted;
+      _refreshVisibleDuringImport();
+    }
+  }
+
+  /// Progress is committed batch by batch; keep the list visible while the
+  /// long import runs, without repeatedly entering the full-screen busy state.
+  Future<void> _refreshVisibleDuringImport() async {
+    if (_refreshInProgress) return;
+    _refreshInProgress = true;
+    try {
+      final total = await _database.count(_filter);
+      final rows = await _database.search(
+          _filter, page: _page, pageSize: _pageSize);
+      if (mounted) {
+        setState(() {
+          _count = total;
+          _rows = rows;
+        });
+      }
+    } catch (_) {
+      // A transient concurrent-read failure must not stop the importer.
+    } finally {
+      _refreshInProgress = false;
+    }
   }
 
   Future<void> _bootstrap() async {
     try {
       await _database.discardInterruptedImports();
+      _partialRecords = await _database.partialRecordCount();
       _showFullDetails = await _database.showFullDetails();
       await _load();
     } catch (error) {
@@ -155,6 +191,7 @@ class _HomePageState extends State<HomePage> {
       if (documents.isEmpty) return;
       if (mounted) setState(() => _showImportSummary = true);
       await _import.importDocuments(documents);
+      _partialRecords = await _database.partialRecordCount();
       if (_import.lastError != null) {
         _message('ایمپورت ناقص: ${_import.lastError}');
       } else {
@@ -358,6 +395,7 @@ class _HomePageState extends State<HomePage> {
     try {
       await _database.deleteEverything();
       _selected.clear();
+      _partialRecords = 0;
       await _load(resetPage: true);
       _message('اطلاعات برنامه حذف شد');
     } catch (error) {
@@ -590,6 +628,19 @@ class _HomePageState extends State<HomePage> {
                   ? 'درصد نامعلوم (حجم فایل اعلام نشده)'
                   : '${(fraction * 100).toStringAsFixed(1)}٪ از بایت‌های ورودی خوانده شده',
               style: const TextStyle(fontSize: 12)),
+          Text('ردیف‌های ردشده: ${_import.invalidRows} | '
+              'فایل‌های ناقص: ${_import.failedFiles}',
+              style: const TextStyle(fontSize: 12)),
+          if (_import.logLocation != null) ...[
+            const SizedBox(height: 5),
+            SelectableText('گزارش خطا روی گوشی: ${_import.logLocation}',
+                style: const TextStyle(fontSize: 12)),
+          ],
+          if (_import.lastError != null) ...[
+            const SizedBox(height: 6),
+            SelectableText('آخرین خطا: ${_import.lastError}',
+                style: const TextStyle(color: Colors.red, fontSize: 12)),
+          ],
           if (_import.busy)
             Align(alignment: Alignment.centerLeft,
               child: TextButton(
@@ -734,6 +785,15 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             if (_showImportSummary) _progressPanel(),
+            if (_partialRecords > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Text(
+                  '$_partialRecords رکورد از ایمپورت‌های ناقص حفظ شده‌اند. '
+                  'ایمپورت دوباره همان فایل ممکن است رکورد تکراری ایجاد کند.',
+                  style: const TextStyle(color: Color(0xFF895400), fontSize: 12),
+                ),
+              ),
             const SizedBox(height: 8),
             if (_selected.isNotEmpty)
               Card(child: Padding(
