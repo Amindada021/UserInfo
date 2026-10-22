@@ -34,6 +34,8 @@ class NameIndexStatus {
 }
 
 class UserInfoDatabase {
+  UserInfoDatabase({this.databasePath});
+  final String? databasePath;
   Database? _db;
   bool _nameIndexReady = false;
   bool _nameIndexBuildRunning = false;
@@ -50,7 +52,7 @@ class UserInfoDatabase {
   }
 
   Future<Database> _open() async {
-    final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
+    final location = databasePath ?? path.join(await getDatabasesPath(), 'userinfo.sqlite');
     final database = await openDatabase(
       location,
       version: 7,
@@ -509,8 +511,7 @@ class UserInfoDatabase {
       } else if (filters.searchType == 'mobile' ||
           filters.searchType == 'national') {
         final column = filters.searchType == 'mobile' ? 'mobile' : 'national';
-        conditions.add('r.id IN (SELECT record_id FROM record_identifiers '
-            'WHERE $column >= ? AND $column < ?)');
+        conditions.add('ids.$column >= ? AND ids.$column < ?');
         args.addAll([query, '$query\u{10ffff}']);
       } else if (filters.searchType == 'name') {
         conditions.add('0');
@@ -527,9 +528,19 @@ class UserInfoDatabase {
         continue;
       }
       final value = TextNormalizer.normalize(entry.value);
-      if (entry.key == 'full_name') {
-        conditions.add("r.normalized_name LIKE ? ESCAPE '!'");
-        args.add('%${_escapeLike(value)}%');
+      if (entry.key == 'mobile' || entry.key == 'national_code') {
+        final column = entry.key == 'mobile' ? 'mobile' : 'national';
+        conditions.add('r.id IN (SELECT record_id FROM record_identifiers '
+            'WHERE $column >= ? AND $column < ?)');
+        args.addAll([value, '$value\u{10ffff}']);
+      } else if (entry.key == 'full_name') {
+        final match = nameFtsQuery(value);
+        if (match.isEmpty) {
+          conditions.add('0');
+        } else {
+          conditions.add('r.id IN (SELECT docid FROM record_name_fts WHERE record_name_fts MATCH ?)');
+          args.add(match);
+        }
       } else if (entry.key == 'father_name') {
         conditions.add("r.normalized_father LIKE ? ESCAPE '!'");
         args.add('%${_escapeLike(value)}%');
@@ -566,6 +577,10 @@ class UserInfoDatabase {
         nameFtsQuery(filters.query).isNotEmpty) {
       return 'record_name_fts CROSS JOIN records r ON '
           'record_name_fts.docid = r.id';
+    }
+    if (TextNormalizer.normalize(filters.query).isNotEmpty &&
+        (filters.searchType == 'mobile' || filters.searchType == 'national')) {
+      return 'record_identifiers ids CROSS JOIN records r ON r.id = ids.record_id';
     }
     return 'records r';
   }
@@ -654,7 +669,7 @@ class UserInfoDatabase {
   Future<T> withDatabaseClosed<T>(Future<T> Function(String path) task) async {
     if (_maintenanceRunning) throw StateError('Database maintenance active');
     _maintenanceRunning = true;
-    final filePath = path.join(await getDatabasesPath(), 'userinfo.sqlite');
+    final filePath = databasePath ?? path.join(await getDatabasesPath(), 'userinfo.sqlite');
     try {
       await _db?.close();
       _db = null;
@@ -717,6 +732,24 @@ class UserInfoDatabase {
     // VACUUM reclaims unused pages for the personal device.
     await database.execute('VACUUM');
     _nameIndexReady = true;
+  }
+
+  /// Numerical/engine metadata only, never records or query arguments.
+  Future<Map<String, Object?>> performanceSnapshot() async {
+    final database = await db;
+    final output = <String, Object?>{'metrics': PerformanceMetrics.snapshot()};
+    for (final pragma in ['journal_mode','synchronous','cache_size','temp_store','mmap_size','page_count','page_size','freelist_count']) {
+      output[pragma] = await database.rawQuery('PRAGMA $pragma');
+    }
+    output['sqlite_version'] = await database.rawQuery('SELECT sqlite_version()');
+    for (final suffix in ['', '-wal']) {
+      final file = File('${database.path}$suffix');
+      output[suffix.isEmpty ? 'database_bytes' : 'wal_bytes'] = await file.exists() ? await file.length() : 0;
+    }
+    try {
+      output['object_bytes'] = await database.rawQuery('SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name');
+    } catch (_) { output['object_bytes'] = 'dbstat unavailable'; }
+    return output;
   }
 
   Future<void> dispose() async {

@@ -266,6 +266,9 @@ class _HomePageState extends State<HomePage> {
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     ++_searchGeneration;
+    _page = 0;
+    _pageCursors..clear()..add(null);
+    if (mounted) setState(() => _busy = true);
     _debounce = Timer(const Duration(milliseconds: 350),
         () => _load(resetPage: true));
   }
