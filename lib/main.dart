@@ -180,6 +180,8 @@ class _HomePageState extends State<HomePage> {
     _buildingIndex = true;
     try {
       var status = await _database.nameIndexStatus();
+      var checkedAt = -100000;
+
       while (mounted && !status.ready && !_maintenanceBusy) {
         // Avoid competing for SQLite writes while importing millions of rows.
         if (_import.busy) {
@@ -189,6 +191,13 @@ class _HomePageState extends State<HomePage> {
         }
         // Keep each SQLite transaction bounded, so interruption does not
         // discard the indexed part of a 5M or 100M-record database.
+        if (status.done - checkedAt >= 100000) {
+          final available = await _source.freeBytes();
+          if (available < 64 * 1024 * 1024) {
+            throw StateError('فضای خالی کمتر از ۶۴ مگابایت است؛ برای ادامه ایندکس فضا آزاد کن.');
+          }
+          checkedAt = status.done;
+        }
         status = await _database.buildNameIndexChunk(limit: 2500);
         if (mounted) setState(() => _indexStatus = status);
         await Future<void>.delayed(const Duration(milliseconds: 30));
@@ -266,6 +275,18 @@ class _HomePageState extends State<HomePage> {
     try {
       final documents = await _source.pick();
       if (documents.isEmpty) return;
+      if (await _database.hasLegacyImports()) {
+        if (!mounted) return;
+        final proceed = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+          title: const Text('توجه به فایل‌های قدیمی'),
+          content: const Text('نسخه قبلی اثر انگشت فایل ذخیره نکرده است. فایل‌هایی که قبلاً کامل یا ناقص وارد کرده‌ای را دوباره انتخاب نکن؛ امکان تشخیص تکراری بودن آن‌ها وجود ندارد. ادامه فقط برای فایل جدید است.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('فایل جدید است')),
+          ],
+        ));
+        if (proceed != true) return;
+      }
       if (mounted) setState(() => _showImportSummary = true);
       await _import.importDocuments(documents);
       _partialRecords = await _database.partialRecordCount();
@@ -1155,6 +1176,9 @@ class _HomePageState extends State<HomePage> {
                       Text('در حال ساخت ایندکس جستجو: '
                           '${(_indexStatus!.fraction * 100).toStringAsFixed(1)}٪',
                           style: const TextStyle(fontSize: 12)),
+                      Text('برآورد اولیه فضای باقی‌مانده ایندکس: حدود '
+                          '${((_indexStatus!.target - _indexStatus!.done) * 256 / 1048576).ceil()} مگابایت؛ بسته به داده متغیر است.',
+                          style: const TextStyle(fontSize: 11)),
                       const SizedBox(height: 5),
                       LinearProgressIndicator(value: _indexStatus!.fraction),
                       const Text(
@@ -1184,7 +1208,7 @@ class _HomePageState extends State<HomePage> {
                 padding: const EdgeInsets.symmetric(vertical: 5),
                 child: Text(
                   '$_partialRecords رکورد از ایمپورت‌های ناقص حفظ شده‌اند. '
-                  'ایمپورت دوباره همان فایل ممکن است رکورد تکراری ایجاد کند.',
+                  'ادامه خودکار فقط برای فایل‌های شروع‌شده در نسخه جدید پشتیبانی می‌شود.',
                   style: const TextStyle(color: Color(0xFF895400), fontSize: 12),
                 ),
               ),

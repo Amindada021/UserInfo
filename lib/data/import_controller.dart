@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../core/performance_metrics.dart';
 
 import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../core/csv_stream_parser.dart';
@@ -93,7 +94,7 @@ class ImportController extends ChangeNotifier {
     fileIndex = 0;
     currentName = '';
     totalBytes = documents.every((d) => d.size != null && d.size! > 0)
-        ? documents.fold<int>(0, (sum, d) => sum + d.size!)
+        ? documents.fold<int>(0, (sum, d) => sum + d.size!) * 2
         : 0;
     readBytes = 0;
     inserted = 0;
@@ -170,7 +171,11 @@ class ImportController extends ChangeNotifier {
       if (logOpen) {
         if (PerformanceMetrics.enabled) {
           PerformanceMetrics.record('import_total', importWatch.elapsedMicroseconds);
-          await _log('PERF ${jsonEncode(PerformanceMetrics.snapshot())}', force: true);
+          try {
+            await _log('PERF ${jsonEncode(PerformanceMetrics.snapshot())}', force: true);
+          } catch (_) {
+            lastError = 'ذخیره آمار عملکرد ناموفق بود';
+          }
         }
         try {
           await _flushLog();
@@ -203,15 +208,17 @@ class ImportController extends ChangeNotifier {
     }
   }
 
-  String _safeName(String name) => name
-      .replaceAll(RegExp(r'[\r\n\t]'), ' ')
-      .replaceAll(RegExp(r'[^a-zA-Z0-9 _.()-]'), '_');
+  String _safeName(String name) => 'CSV-$fileIndex';
 
   String _safeReason(Object error) {
-    final raw = error.toString().replaceAll(RegExp(r'[\r\n\t]'), ' ');
-    // Never print SQL bound arguments or any raw person fields into logs.
-    final prefix = raw.split(RegExp(r'\[arguments:|\[parameters:')).first;
-    return prefix.length > 240 ? prefix.substring(0, 240) : prefix;
+    // Exception strings can contain SQL parameters, URIs or CSV cell values.
+    if (error is DatabaseException) {
+      if (error.isDatabaseClosedError()) return 'DATABASE_CLOSED';
+      return 'SQLITE_WRITE_FAILED';
+    }
+    if (error is ImportCancelled) return 'CANCELLED';
+    if (error is FormatException) return 'INVALID_CSV_FORMAT';
+    return 'IO_OR_IMPORT_FAILED';
   }
 
   Stream<List<int>> _bytes() async* {
@@ -236,7 +243,28 @@ class ImportController extends ChangeNotifier {
     var rowsInFile = 0;
     var skippedInFile = 0;
     var opened = false;
+    var committedRecord = 0;
+    var lastRecord = 0;
+    var bufferedCharacters = 0;
     try {
+      stage = 'بررسی یکپارچگی فایل برای جلوگیری از ورود تکراری';
+      notifyListeners();
+      await source.open(doc);
+      opened = true;
+      final fingerprint = (await PerformanceMetrics.measure('source_sha256',
+          () => sha256.bind(_bytes()).first)).toString();
+      await source.close();
+      opened = false;
+      final checkpoint = await database.importCheckpoint(fingerprint);
+      if (checkpoint != null && checkpoint['state'] == 'complete') {
+        await _log('FILE_ALREADY_COMPLETE index=$fileIndex', force: true);
+        if (doc.size != null) readBytes += doc.size!;
+        return;
+      }
+      if (checkpoint != null) {
+        fileId = checkpoint['file_id'] as int;
+        committedRecord = checkpoint['csv_record'] as int;
+      }
       await source.open(doc);
       opened = true;
       stage = 'خواندن و ذخیره ${_safeName(doc.name)}';
@@ -247,9 +275,12 @@ class ImportController extends ChangeNotifier {
       await _log('FILE_BEGIN index=$fileIndex '
           'file=${_safeName(doc.name)}', force: true);
 
-      await for (final record in const CsvStreamParser()
-          .parseWithErrors(_bytes())) {
+      await for (final parsedBatch in const CsvStreamParser().parseBatches(_bytes())) {
+        for (final record in parsedBatch) {
         if (cancelling) throw ImportCancelled();
+
+        lastRecord = record.recordNumber;
+        if (header.isNotEmpty && record.recordNumber <= committedRecord) continue;
 
         if (!record.isValid) {
           invalidRows++;
@@ -279,11 +310,13 @@ class ImportController extends ChangeNotifier {
           } else {
             throw const FormatException('هدر CSV شناسایی نشد');
           }
-          fileId = await database.beginFile(bank: bank);
+          if (fileId == 0) {
+            fileId = await database.beginFile(bank: bank, fingerprint: fingerprint);
+          }
           continue;
         }
 
-        rowNumber++;
+        rowNumber = record.recordNumber - 1;
         if (cells.length != header.length) {
           invalidRows++;
           skippedInFile++;
@@ -299,6 +332,7 @@ class ImportController extends ChangeNotifier {
         for (var j = 0; j < header.length; j++) {
           values[header[j]] = TextNormalizer.cleaned(cells[j]);
         }
+        bufferedCharacters += cells.fold<int>(0, (sum, cell) => sum + cell.length);
         buffer.add({
           'file_id': fileId,
           'bank': bank,
@@ -315,21 +349,26 @@ class ImportController extends ChangeNotifier {
         if (mapWatch != null) {
           PerformanceMetrics.record('normalize_and_map', mapWatch.elapsedMicroseconds);
         }
-        if (buffer.length >= 1500) {
-          await database.insertBatch(fileId, buffer);
+        if (buffer.length >= 1500 || bufferedCharacters >= 2 * 1024 * 1024) {
+          if (rowsInFile % 30000 == 0 && await source.freeBytes() < 64 * 1024 * 1024) {
+            throw StateError('LOW_STORAGE');
+          }
+          await database.insertBatch(fileId, buffer, csvRecord: lastRecord);
           inserted += buffer.length;
           PerformanceMetrics.rows += buffer.length;
           rowsInFile += buffer.length;
           buffer.clear();
+          bufferedCharacters = 0;
           notifyListeners();
         }
       }
 
+      }
       if (fileId == 0) {
         throw const FormatException('CSV معتبر بدون هدر یافت نشد');
       }
-      if (buffer.isNotEmpty) {
-        await database.insertBatch(fileId, buffer);
+      if (buffer.isNotEmpty || lastRecord > committedRecord) {
+        await database.insertBatch(fileId, buffer, csvRecord: lastRecord);
         inserted += buffer.length;
           PerformanceMetrics.rows += buffer.length;
         rowsInFile += buffer.length;

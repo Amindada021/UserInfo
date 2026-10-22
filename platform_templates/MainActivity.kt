@@ -199,6 +199,9 @@ class MainActivity : FlutterActivity() {
                         result.error("OPEN_FAILED", e.message, null)
                     }
                 }
+                "freeBytes" -> {
+                    result.success(android.os.StatFs(applicationInfo.dataDir).availableBytes)
+                }
                 "read" -> {
                     ioExecutor.execute {
                         try {
@@ -206,7 +209,7 @@ class MainActivity : FlutterActivity() {
                             val buffer = ByteArray(1024 * 1024)
                             val count = stream.read(buffer)
                             runOnUiThread {
-                                result.success(if (count < 0) null else buffer.copyOf(count))
+                                result.success(if (count < 0) null else if (count == buffer.size) buffer else buffer.copyOf(count))
                             }
                         } catch (e: Exception) {
                             runOnUiThread { result.error("READ_FAILED", e.message, null) }

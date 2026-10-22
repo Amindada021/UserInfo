@@ -73,6 +73,9 @@ class CsvSource {
       (await _channel.invokeMethod<int>(
           'importDatabase', {'path': stagingPath})) ?? 0;
 
+  Future<int> freeBytes() async =>
+      await _channel.invokeMethod<int>('freeBytes') ?? 0;
+
   Future<void> close() async => _channel.invokeMethod<void>('close');
 
   Future<Uint8List?> pdfFont() async =>

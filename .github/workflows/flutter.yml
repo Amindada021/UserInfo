@@ -59,6 +59,9 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Synthetic parser benchmark
+        run: dart run tool/benchmarks/parser_benchmark.dart 1000000
+
       - name: Read semantic version
         id: version
         shell: bash

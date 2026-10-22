@@ -44,7 +44,7 @@ class UserInfoDatabase {
     final location = path.join(await getDatabasesPath(), 'userinfo.sqlite');
     final database = await openDatabase(
       location,
-      version: 6,
+      version: 7,
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // Preserve imported people while irreversibly removing source-file metadata.
@@ -57,6 +57,9 @@ class UserInfoDatabase {
         }
         if (oldVersion < 4) {
           await _setupFavorites(database);
+        }
+        if (oldVersion < 7) {
+          await _setupImportCheckpoints(database);
         }
         if (oldVersion < 6) {
           await _setupIdentifiers(database);
@@ -115,6 +118,7 @@ class UserInfoDatabase {
         await _setupFavorites(database);
         await _enableBulkIndexMode(database);
         await _setupIdentifiers(database);
+        await _setupImportCheckpoints(database);
       },
     );
     // Recover if Android terminated the app midway through a bulk import.
@@ -192,6 +196,26 @@ class UserInfoDatabase {
     await db.insert('app_settings',
         {'key': 'name_index_bulk_mode', 'value': '0'},
         conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> _setupImportCheckpoints(DatabaseExecutor executor) async {
+    await executor.execute('CREATE TABLE IF NOT EXISTS import_checkpoints ('
+        'fingerprint TEXT PRIMARY KEY, file_id INTEGER NOT NULL UNIQUE '
+        'REFERENCES files(id) ON DELETE CASCADE, csv_record INTEGER NOT NULL DEFAULT 0)');
+  }
+
+  Future<bool> hasLegacyImports() async {
+    final database = await db;
+    return (await database.rawQuery('SELECT 1 FROM files f WHERE imported_count > 0 '
+        'AND NOT EXISTS(SELECT 1 FROM import_checkpoints c WHERE c.file_id = f.id) LIMIT 1')).isNotEmpty;
+  }
+
+  Future<Map<String, Object?>?> importCheckpoint(String fingerprint) async {
+    final database = await db;
+    final rows = await database.rawQuery('SELECT c.file_id, c.csv_record, f.state '
+        'FROM import_checkpoints c JOIN files f ON f.id=c.file_id WHERE fingerprint=?',
+        [fingerprint]);
+    return rows.isEmpty ? null : rows.first;
   }
 
   // A small derived table preserves original identifier strings unchanged.
@@ -373,9 +397,10 @@ class UserInfoDatabase {
 
   // File rows are anonymous internal import transactions. The device never
   // persists the URI, filename, part or file size.
-  Future<int> beginFile({required String bank}) async {
+  Future<int> beginFile({required String bank, String? fingerprint}) async {
     final database = await db;
-    return database.insert('files', {
+    return database.transaction((tx) async {
+    final id = await tx.insert('files', {
       'uri': '',
       'name': '',
       'bank': bank,
@@ -383,22 +408,47 @@ class UserInfoDatabase {
       'state': 'importing',
       'created_at': DateTime.now().toIso8601String(),
     });
+    if (fingerprint != null) {
+      await tx.insert('import_checkpoints', {'fingerprint': fingerprint, 'file_id': id});
+    }
+    return id;
+    });
   }
 
-  Future<void> insertBatch(int fileId, List<Map<String, Object?>> rows) async {
-    if (rows.isEmpty) return;
+  Future<void> insertBatch(int fileId, List<Map<String, Object?>> rows,
+      {int? csvRecord}) async {
+    if (rows.isEmpty && csvRecord == null) return;
     final database = await db;
-    await database.transaction((tx) async {
+    await PerformanceMetrics.measure('insert_transaction', () => database.transaction((tx) async {
       final batch = tx.batch();
-      for (final row in rows) {
-        batch.insert('records', row);
+      // Bound parameters below Android's conservative 999-variable limit.
+      // Reuse one SQL shape for full groups; avoid 1500 channel operations.
+      if (rows.isNotEmpty) {
+        final columns = rows.first.keys.toList(growable: false);
+        const legal = {'file_id', 'bank', 'part', 'row_number',
+          'normalized_name', 'normalized_father', 'normalized_city', 'normalized_province',
+          ...allowedFields};
+        if (columns.any((c) => !legal.contains(c))) throw ArgumentError('Invalid insert column');
+        final groupSize = 900 ~/ columns.length;
+        final tuple = '(${List.filled(columns.length, '?').join(',')})';
+        for (var start = 0; start < rows.length; start += groupSize) {
+          final end = (start + groupSize).clamp(0, rows.length);
+          final group = rows.sublist(start, end);
+          batch.rawInsert('INSERT INTO records(${columns.join(',')}) VALUES '
+              '${List.filled(group.length, tuple).join(',')}',
+              [for (final row in group) for (final column in columns) row[column]]);
+        }
       }
       await PerformanceMetrics.measure('sqlite_batch',
-            () => batch.commit(noResult: true));
+          () => batch.commit(noResult: true));
+      if (csvRecord != null) {
+        await tx.update('import_checkpoints', {'csv_record': csvRecord},
+            where: 'file_id = ?', whereArgs: [fileId]);
+      }
       await tx.rawUpdate(
           'UPDATE files SET imported_count = imported_count + ? WHERE id = ?',
           [rows.length, fileId]);
-    });
+    }));
   }
 
   Future<void> finishFile(int fileId) async {
