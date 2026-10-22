@@ -76,7 +76,10 @@ class CsvStreamParser {
     // A row containing U+FFFD is rejected instead of silently changing an ID.
     await for (final chunk in bytes.transform(
         const Utf8Decoder(allowMalformed: true))) {
-      for (final char in chunk.split('')) {
+      // Iterate lazily over characters: chunk.split('') allocates hundreds
+      // of thousands of temporary String objects for every 256 KB chunk.
+      for (var i = 0; i < chunk.length; i++) {
+        final char = chunk[i];
         if (firstChar) {
           firstChar = false;
           if (char == '\uFEFF') continue;
