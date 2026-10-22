@@ -51,7 +51,7 @@ class ExportService {
     final style = CellStyle(
       bold: true,
       fontSize: 12,
-      backgroundColorHex: ExcelColor.fromHexString('#DDEDE8').hex,
+      backgroundColorHex: ExcelColor.fromHexString('#DDEDE8'),
       horizontalAlign: HorizontalAlign.Right,
     );
     for (var rowIndex = 0; rowIndex < rows.length; rowIndex++) {
