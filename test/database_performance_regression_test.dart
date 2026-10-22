@@ -99,4 +99,14 @@ void main() {
     finally { await restored.dispose(); }
   });
 
+  test('reads wait until a closed-file maintenance operation completes', () async {
+    await seed(count:2);
+    Future<int>? pending;
+    await database.withDatabaseClosed((filename) async {
+      pending = database.totalRecords();
+      expect(await File(filename).exists(),true);
+    });
+    expect(await pending!,2);
+  });
+
 }

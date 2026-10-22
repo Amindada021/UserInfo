@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import '../core/performance_metrics.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
@@ -40,8 +41,11 @@ class UserInfoDatabase {
   bool _nameIndexReady = false;
   bool _nameIndexBuildRunning = false;
   bool _maintenanceRunning = false;
+  Completer<void>? _maintenanceComplete;
   Future<Database>? _opening;
   Future<Database> get db async {
+    final maintenance = _maintenanceComplete;
+    if (maintenance != null) await maintenance.future;
     if (_db != null) return _db!;
     final pending = _opening ??= _open();
     try {
@@ -670,13 +674,27 @@ class UserInfoDatabase {
   Future<T> withDatabaseClosed<T>(Future<T> Function(String path) task) async {
     if (_maintenanceRunning) throw StateError('Database maintenance active');
     _maintenanceRunning = true;
-    final filePath = databasePath ?? path.join(await getDatabasesPath(), 'userinfo.sqlite');
+    final complete = _maintenanceComplete = Completer<void>();
     try {
-      await _db?.close();
+      final filePath = databasePath ?? path.join(await getDatabasesPath(), 'userinfo.sqlite');
+      if (_opening != null) await _opening;
+      final handle = _db;
+      if (handle != null) {
+        final mode = await handle.rawQuery('PRAGMA journal_mode');
+        if (mode.first.values.first == 'wal') {
+          final checkpoint = await handle.rawQuery('PRAGMA wal_checkpoint(TRUNCATE)');
+          if (checkpoint.first['busy'] != 0) {
+            throw StateError('Database backup checkpoint is busy');
+          }
+        }
+        await handle.close();
+      }
       _db = null;
       return await task(filePath);
     } finally {
       _maintenanceRunning = false;
+      _maintenanceComplete = null;
+      complete.complete();
     }
   }
 
