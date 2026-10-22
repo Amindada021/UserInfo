@@ -67,7 +67,8 @@ class _HomePageState extends State<HomePage> {
 
   List<Map<String, Object?>> _rows = const [];
   final Set<int> _selected = {};
-  final Set<int> _revealed = {};
+  bool _showFullDetails = false;
+  String _searchType = 'name';
   Timer? _debounce;
   int _page = 0;
   int _pageSize = 20;
@@ -82,6 +83,7 @@ class _HomePageState extends State<HomePage> {
 
   SearchFilters get _filter => SearchFilters(
         query: _search.text,
+        searchType: _searchType,
         bank: _bank,
         fields: _fieldFilters,
         missingMobile: _missingMobile,
@@ -103,6 +105,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _bootstrap() async {
     try {
       await _database.discardInterruptedImports();
+      _showFullDetails = await _database.showFullDetails();
       await _load();
     } catch (error) {
       _message('خطای راه‌اندازی دیتابیس: $error');
@@ -164,6 +167,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<bool> _confirmSensitive() async {
+    if (_showFullDetails) return true;
     return await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
@@ -257,7 +261,7 @@ class _HomePageState extends State<HomePage> {
                 ),
                 SwitchListTile(
                   title: const Text('شامل اطلاعات حساس'),
-                  subtitle: const Text('در حالت عادی فقط نام، بانک و پارت'),
+                  subtitle: const Text('در حالت عادی فقط نام و بانک'),
                   value: sensitive,
                   onChanged: (v) => update(() => sensitive = v),
                 ),
@@ -300,6 +304,33 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _openSettings() async {
+    final showFull = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('تنظیمات نمایش',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            SwitchListTile.adaptive(
+              title: const Text('نمایش اطلاعات کامل همه اشخاص'),
+              subtitle: const Text('یک تنظیم برای تمام کارت‌ها، نه جداگانه برای هر شخص'),
+              value: _showFullDetails,
+              onChanged: (v) => Navigator.pop(sheetContext, v),
+            ),
+            const SizedBox(height: 8),
+          ]),
+        ),
+      ),
+    );
+    if (showFull == null || showFull == _showFullDetails) return;
+    if (showFull && !await _confirmSensitive()) return;
+    await _database.setShowFullDetails(showFull);
+    if (mounted) setState(() => _showFullDetails = showFull);
+  }
+
   Future<void> _deleteEverything() async {
     if (_import.busy) {
       _message('ابتدا ایمپورت را متوقف کن');
@@ -328,7 +359,6 @@ class _HomePageState extends State<HomePage> {
     try {
       await _database.deleteEverything();
       _selected.clear();
-      _revealed.clear();
       await _load(resetPage: true);
       _message('اطلاعات برنامه حذف شد');
     } catch (error) {
@@ -339,7 +369,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _openFilters() async {
     final controllers = {
       for (final entry in ExportService.labels.entries)
-        if (UserInfoDatabase.allowedFields.contains(entry.key) || entry.key == 'part')
+        if (UserInfoDatabase.allowedFields.contains(entry.key))
           entry.key: TextEditingController(
               text: _fieldFilters[entry.key] ?? ''),
     };
@@ -449,7 +479,7 @@ class _HomePageState extends State<HomePage> {
   Widget _detailRow(Map<String, Object?> record, String key, bool visible) {
     final value = record[key]?.toString();
     if (value == null || value.isEmpty) return const SizedBox.shrink();
-    final display = visible || const ['full_name', 'bank', 'part']
+    final display = visible || const ['full_name', 'bank']
             .contains(key)
         ? value : _masked(value);
     return Padding(
@@ -463,7 +493,7 @@ class _HomePageState extends State<HomePage> {
         IconButton(
           icon: const Icon(Icons.copy, size: 18),
           tooltip: 'کپی این فیلد',
-          onPressed: visible || const ['full_name', 'bank', 'part']
+          onPressed: visible || const ['full_name', 'bank']
               .contains(key)
               ? () async {
                   await Clipboard.setData(ClipboardData(text: value));
@@ -478,7 +508,7 @@ class _HomePageState extends State<HomePage> {
   Widget _personCard(Map<String, Object?> row) {
     final id = row['id'] as int;
     final name = row['full_name']?.toString() ?? 'بدون نام';
-    final visible = _revealed.contains(id);
+    final visible = _showFullDetails;
     return Card(
       key: ValueKey(id),
       child: ExpansionTile(
@@ -499,34 +529,15 @@ class _HomePageState extends State<HomePage> {
             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
         subtitle: Row(children: [
           Text('بانک ${row['bank']}', style: const TextStyle(fontSize: 12)),
-          const SizedBox(width: 10),
-          Expanded(child: Text(row['part']?.toString() ?? '',
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade600))),
+          const Spacer(),
           IconButton(
             visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.copy_outlined, size: 19),
-            tooltip: 'کپی شخص',
-            onPressed: () => _copyRecord(row, sensitive: visible),
+            icon: const Icon(Icons.copy_all_outlined, size: 19),
+            tooltip: 'کپی تمام اطلاعات این شخص',
+            onPressed: () => _copyRecord(row, sensitive: true),
           ),
         ]),
         children: [
-          SwitchListTile.adaptive(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            title: const Text('نمایش اطلاعات کامل'),
-            subtitle: const Text('ابتدا نمایش کامل را تأیید کن'),
-            value: visible,
-            onChanged: (value) async {
-              if (value && !await _confirmSensitive()) return;
-              setState(() {
-                if (value) {
-                  _revealed.add(id);
-                } else {
-                  _revealed.remove(id);
-                }
-              });
-            },
-          ),
           for (final key in ExportService.labels.keys)
             _detailRow(row, key, visible),
         ],
@@ -633,6 +644,11 @@ class _HomePageState extends State<HomePage> {
             tooltip: 'فیلترها',
             onPressed: _openFilters,
           ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'تنظیمات',
+            onPressed: _openSettings,
+          ),
           PopupMenuButton<String>(
             onSelected: (item) {
               if (item == 'export') _showExportOptions();
@@ -650,16 +666,45 @@ class _HomePageState extends State<HomePage> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Column(children: [
             const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<String>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: 'name', icon: Icon(Icons.person_search, size: 16),
+                    label: Text('نام و فامیل')),
+                  ButtonSegment(value: 'mobile', icon: Icon(Icons.phone_android, size: 16),
+                    label: Text('موبایل')),
+                  ButtonSegment(value: 'national', icon: Icon(Icons.badge_outlined, size: 16),
+                    label: Text('کد ملی')),
+                ],
+                selected: {_searchType},
+                onSelectionChanged: (items) {
+                  setState(() {
+                    _searchType = items.first;
+                    _search.clear();
+                  });
+                  _load(resetPage: true);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _search,
-              onChanged: _onSearchChanged,
+              keyboardType: _searchType == 'name' ? TextInputType.text
+                  : TextInputType.phone,
+              onChanged: (value) {
+                setState(() {});
+                _onSearchChanged(value);
+              },
               decoration: InputDecoration(
-                hintText: 'جستجوی نام در همه بانک‌ها...',
+                hintText: _searchType == 'name' ? 'نام یا نام خانوادگی...'
+                    : _searchType == 'mobile' ? 'شماره موبایل...' : 'کد ملی...',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _search.text.isEmpty ? null : IconButton(
                   icon: const Icon(Icons.close),
                   onPressed: () {
-                    _search.clear();
+                    setState(_search.clear);
                     _load(resetPage: true);
                   },
                 ),
