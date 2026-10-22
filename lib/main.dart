@@ -8,6 +8,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'data/csv_source.dart';
 import 'data/database_transfer_service.dart';
+import 'data/restore_progress.dart';
 import 'security/passcode_gate.dart';
 import 'data/export_service.dart';
 import 'data/import_controller.dart';
@@ -90,6 +91,9 @@ class _HomePageState extends State<HomePage> {
   bool _showFullDetails = false;
   bool _favoritesOnly = false;
   bool _maintenanceBusy = false;
+  RestoreProgress? _restoreProgress;
+  final Stopwatch _restoreElapsed = Stopwatch();
+  Timer? _restoreTicker;
   bool _buildingIndex = false;
   NameIndexStatus? _indexStatus;
   String? _indexError;
@@ -548,9 +552,21 @@ class _HomePageState extends State<HomePage> {
       ),
     ) ?? false;
     if (!approved || !mounted) return;
-    setState(() => _maintenanceBusy = true);
+    _restoreElapsed
+      ..reset()
+      ..start();
+    _restoreTicker?.cancel();
+    _restoreTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+    setState(() {
+      _maintenanceBusy = true;
+      _restoreProgress = const RestoreProgress(stage: RestoreStage.selecting);
+    });
     try {
-      await _transfer.restoreDatabase();
+      await _transfer.restoreDatabase(onProgress: (progress) {
+        if (mounted) setState(() => _restoreProgress = progress);
+      });
       _selected.clear();
       _partialRecords = await _database.partialRecordCount();
       _indexStatus = await _database.nameIndexStatus();
@@ -559,12 +575,117 @@ class _HomePageState extends State<HomePage> {
     } catch (error) {
       _message('بازیابی انجام نشد: $error');
     } finally {
+      _restoreTicker?.cancel();
+      _restoreTicker = null;
+      _restoreElapsed.stop();
       if (mounted) {
-        setState(() => _maintenanceBusy = false);
+        setState(() {
+          _maintenanceBusy = false;
+          _restoreProgress = null;
+        });
         await _load(resetPage: true);
         _buildNameIndex();
       }
     }
+  }
+
+  String _restoreSize(int bytes) {
+    if (bytes < 1024) return '$bytes بایت';
+    if (bytes < 1048576) return '${(bytes / 1024).toStringAsFixed(1)} کیلوبایت';
+    if (bytes < 1073741824) {
+      return '${(bytes / 1048576).toStringAsFixed(1)} مگابایت';
+    }
+    return '${(bytes / 1073741824).toStringAsFixed(2)} گیگابایت';
+  }
+
+  String _restoreDuration(Duration value) {
+    final hours = value.inHours;
+    final minutes = value.inMinutes.remainder(60);
+    final seconds = value.inSeconds.remainder(60);
+    return hours > 0
+        ? '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}'
+        : '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Widget _restoreOverlay() {
+    final info = _restoreProgress!;
+    final copying = info.stage == RestoreStage.copying;
+    final checking = info.stage == RestoreStage.checking;
+    final title = switch (info.stage) {
+      RestoreStage.selecting => 'انتخاب فایل بکاپ',
+      RestoreStage.copying => 'مرحله ۱ از ۳ — انتقال فایل',
+      RestoreStage.checking => 'مرحله ۲ از ۳ — بررسی سلامت دیتابیس',
+      RestoreStage.replacing => 'مرحله ۳ از ۳ — جایگزینی دیتابیس',
+      RestoreStage.complete => 'بازیابی انجام شد',
+    };
+    final percent = info.copyFraction;
+    final speed = info.bytesPerSecond;
+    final eta = info.estimatedCopyRemaining;
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Colors.black54,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Card(
+              margin: const EdgeInsets.all(20),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      const Icon(Icons.settings_backup_restore, size: 24),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(title,
+                        style: const TextStyle(fontSize: 16,
+                            fontWeight: FontWeight.bold))),
+                    ]),
+                    const SizedBox(height: 16),
+                    LinearProgressIndicator(
+                      value: copying ? percent : null,
+                      minHeight: 9,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    const SizedBox(height: 10),
+                    if (copying) ...[
+                      Text(percent == null
+                          ? 'منتقل‌شده: ${_restoreSize(info.copiedBytes)}'
+                          : 'انتقال فایل: ${(percent * 100).toStringAsFixed(1)}٪'),
+                      Text(info.totalBytes == null
+                          ? 'حجم کل فایل توسط انتخابگر اعلام نشده'
+                          : '${_restoreSize(info.copiedBytes)} از '
+                              '${_restoreSize(info.totalBytes!)}'),
+                      if (speed != null)
+                        Text('سرعت انتقال: ${_restoreSize(speed.round())} در ثانیه'),
+                      Text(eta == null
+                          ? 'زمان باقی‌مانده کپی: در حال محاسبه...'
+                          : 'زمان تقریبی باقی‌مانده کپی: '
+                              '${_restoreDuration(eta)}'),
+                    ] else if (checking) ...[
+                      Text('کپی ${_restoreSize(info.copiedBytes)} کامل شد.'),
+                      const Text('در حال بررسی سلامت SQLite؛ '
+                          'برای این مرحله درصد و زمان دقیق در دسترس نیست.'),
+                    ] else if (info.stage == RestoreStage.replacing)
+                      const Text('بکاپ بررسی شد؛ در حال جایگزینی دیتابیس...'),
+                    if (info.stage == RestoreStage.selecting)
+                      const Text('فایل بکاپ را در انتخابگر اندروید انتخاب کن.'),
+                    const SizedBox(height: 8),
+                    Text('زمان سپری‌شده: ${_restoreDuration(_restoreElapsed.elapsed)}',
+                      style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 12),
+                    const Text('برنامه را تا پایان باز نگه دار. '
+                        'دیتابیس فعلی فقط پس از تأیید سلامت بکاپ جایگزین می‌شود.',
+                        style: TextStyle(fontSize: 12)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadAfterRestore() async {
@@ -1124,7 +1245,8 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-      body: SafeArea(
+      body: Stack(children: [
+        SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Column(children: [
@@ -1274,12 +1396,16 @@ class _HomePageState extends State<HomePage> {
           ]),
         ),
       ),
+      if (_maintenanceBusy && _restoreProgress != null)
+        _restoreOverlay(),
+      ]),
     );
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _restoreTicker?.cancel();
     _search.dispose();
     _import.removeListener(_onImportChanged);
     _import.dispose();
