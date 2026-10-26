@@ -4,6 +4,7 @@ import '../core/performance_metrics.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 import '../core/text_normalizer.dart';
+import '../core/identifier_query.dart';
 
 class SearchFilters {
   const SearchFilters({
@@ -528,7 +529,7 @@ class UserInfoDatabase {
       .replaceAll('%', '!%')
       .replaceAll('_', '!_');
 
-  (String, List<Object?>) _where(SearchFilters filters) {
+  (String, List<Object?>) _where(SearchFilters filters, {String? exactIdentifier}) {
     final conditions = <String>[];
     final args = <Object?>[];
     if (filters.favoritesOnly) {
@@ -547,8 +548,12 @@ class UserInfoDatabase {
       } else if (filters.searchType == 'mobile' ||
           filters.searchType == 'national') {
         final column = filters.searchType == 'mobile' ? 'mobile' : 'national';
-        conditions.add('ids.$column >= ? AND ids.$column < ?');
-        args.addAll([query, '$query\u{10ffff}']);
+        final identifier = IdentifierQuery(query, mobile: column == 'mobile');
+        final (predicate, values) = exactIdentifier == null
+            ? identifier.predicate('ids.$column')
+            : ('ids.$column = ?', <Object?>[exactIdentifier]);
+        conditions.add(predicate);
+        args.addAll(values);
       } else if (filters.searchType == 'name') {
         conditions.add('0');
       } else {
@@ -566,9 +571,11 @@ class UserInfoDatabase {
       final value = TextNormalizer.normalize(entry.value);
       if (entry.key == 'mobile' || entry.key == 'national_code') {
         final column = entry.key == 'mobile' ? 'mobile' : 'national';
+        final (predicate, values) = IdentifierQuery(value,
+            mobile: column == 'mobile').predicate(column);
         conditions.add('r.id IN (SELECT record_id FROM record_identifiers '
-            'WHERE $column >= ? AND $column < ?)');
-        args.addAll([value, '$value\u{10ffff}']);
+            'WHERE $predicate)');
+        args.addAll(values);
       } else if (entry.key == 'full_name') {
         final match = nameFtsQuery(value);
         if (match.isEmpty) {
@@ -623,6 +630,7 @@ class UserInfoDatabase {
 
   Future<int> count(SearchFilters filters) async {
     final database = await db;
+    await _checkIdentifierBreadth(database, filters);
     final (where, args) = _where(filters);
     final result = await PerformanceMetrics.measure('search_count', () => database.rawQuery(
         'SELECT COUNT(*) AS count FROM ${_from(filters)} $where', args));
@@ -633,6 +641,35 @@ class UserInfoDatabase {
       SearchFilters filters, {int? beforeId, int pageSize = 20}) async {
     if (pageSize < 1 || pageSize > 101) throw ArgumentError('Invalid page size');
     final database = await db;
+    await _checkIdentifierBreadth(database, filters);
+    if (filters.query.trim().isNotEmpty &&
+        (filters.searchType == 'mobile' || filters.searchType == 'national')) {
+      final identifier = IdentifierQuery(filters.query,
+          mobile: filters.searchType == 'mobile');
+      if (identifier.exact) {
+        // One equality seek per representation. Each branch stops at LIMIT,
+        // even if millions of records share this identifier. Only at most
+        // five pages are merged in Dart, never all matching record IDs.
+        final found = <int, Map<String, Object?>>{};
+        for (final value in identifier.values) {
+          final (where, args) = _where(filters, exactIdentifier: value);
+          final column = filters.searchType == 'mobile' ? 'mobile' : 'national';
+          final rows = await database.rawQuery(
+            'SELECT r.*, EXISTS(SELECT 1 FROM favorites f WHERE f.record_id=r.id) AS is_favorite '
+            'FROM record_identifiers ids INDEXED BY idx_ident_$column '
+            'CROSS JOIN records r ON r.id=ids.record_id $where '
+            '${beforeId == null ? '' : 'AND ids.record_id < ?'} '
+            'ORDER BY ids.record_id DESC LIMIT ?',
+            [...args, if (beforeId != null) beforeId, pageSize]);
+          for (final row in rows) {
+            found[row['id'] as int] = row;
+          }
+        }
+        final rows = found.values.toList()
+          ..sort((a, b) => (b['id'] as int).compareTo(a['id'] as int));
+        return rows.take(pageSize).toList();
+      }
+    }
     final (where, args) = _where(filters);
     final from = _from(filters);
     final order = from.startsWith('record_name_fts') ? 'record_name_fts.docid' : 'r.id';
@@ -641,6 +678,31 @@ class UserInfoDatabase {
       'SELECT r.*, EXISTS(SELECT 1 FROM favorites f WHERE f.record_id = r.id) AS is_favorite '
       'FROM $from $where $cursor ORDER BY $order DESC LIMIT ?',
       [...args, if (beforeId != null) beforeId, pageSize]));
+  }
+
+  /// Bound prefix work before any record joins or ID sort. A digit minimum
+  /// alone is insufficient when millions of rows share the same prefix.
+  Future<void> _checkIdentifierBreadth(Database database, SearchFilters filters) async {
+    final requests = <(String, String)>[
+      if (filters.query.trim().isNotEmpty &&
+          (filters.searchType == 'mobile' || filters.searchType == 'national'))
+        (filters.searchType, filters.query),
+      for (final field in filters.fields.entries)
+        if ((field.key == 'mobile' || field.key == 'national_code') &&
+            field.value.trim().isNotEmpty)
+          (field.key == 'mobile' ? 'mobile' : 'national', field.value),
+    ];
+    for (final (column, input) in requests) {
+      final identifier = IdentifierQuery(input, mobile: column == 'mobile');
+      if (identifier.exact) continue;
+      final (predicate, args) = identifier.predicate(column);
+      final result = await database.rawQuery(
+          'SELECT COUNT(*) AS n FROM (SELECT record_id FROM record_identifiers '
+          'INDEXED BY idx_ident_$column WHERE $predicate LIMIT 10001)', args);
+      if ((result.first['n'] as num) > 10000) {
+        throw StateError('نتایج این پیش‌شماره زیاد است؛ رقم‌های بیشتری وارد کنید');
+      }
+    }
   }
 
   Future<bool> toggleFavorite(int id) async {
@@ -818,3 +880,4 @@ class UserInfoDatabase {
     _db = null;
   }
 }
+
