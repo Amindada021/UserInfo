@@ -193,17 +193,15 @@ class _HomePageState extends State<HomePage> {
     try {
       var status = await _database.nameIndexStatus();
       if (mounted) setState(() => _indexStatus = status);
-      var checkedAt = -100000;
       var updatedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
       while (mounted && !status.ready && !_maintenanceBusy &&
           !_import.busy && !_indexPauseRequested) {
-        if (status.done - checkedAt >= 100000) {
-          final available = await _source.freeBytes();
-          if (available < 64 * 1024 * 1024) {
-            throw StateError('فضای خالی کمتر از ۶۴ مگابایت است؛ برای ادامه ایندکس فضا آزاد کن.');
-          }
-          checkedAt = status.done;
+        // Recheck before every committed chunk, including after resume.
+        // Unknown free space (0) must also stop rather than guess.
+        final available = await _source.freeBytes();
+        if (available < 512 * 1024 * 1024) {
+          throw StateError('برای ادامه ایندکس حداقل ۵۱۲ مگابایت فضای خالی لازم است؛ پیشرفت قبلی محفوظ است.');
         }
         status = await _database.buildNameIndexChunk(limit: 2500);
         final now = DateTime.now();
@@ -273,6 +271,7 @@ class _HomePageState extends State<HomePage> {
 
     } catch (error) {
       if (generation == _searchGeneration) {
+        if (mounted) setState(() { _rows = []; _hasNext = false; _count = null; });
         _message('خطا در خواندن نتایج: $error');
       }
     } finally {
@@ -1499,7 +1498,7 @@ class _HomePageState extends State<HomePage> {
               },
               decoration: InputDecoration(
                 hintText: _searchType == 'name' ? 'نام یا نام خانوادگی...'
-                    : _searchType == 'mobile' ? 'شماره موبایل...' : 'کد ملی...',
+                    : _searchType == 'mobile' ? 'موبایل کامل یا حداقل ۷ رقم از ابتدا' : 'کد ملی کامل یا حداقل ۷ رقم از ابتدا',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _search.text.isEmpty ? null : IconButton(
                   icon: const Icon(Icons.close),
@@ -1656,3 +1655,4 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 }
+

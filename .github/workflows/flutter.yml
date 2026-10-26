@@ -39,6 +39,9 @@ jobs:
           cp platform_templates/ImportForegroundService.kt android/app/src/main/kotlin/com/amindada021/userinfo/ImportForegroundService.kt
           cp platform_templates/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
+      - name: Configure permanent parallel application ID
+        run: python3 tool/configure_parallel_android.py
+
       - name: Generate UserInfo brand logo and launcher icons
         run: python3 tool/generate_logo.py
 
@@ -83,19 +86,19 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=next-v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Configure stable Android signing when secrets are available
         id: signing
         shell: bash
         env:
-          USERINFO_ANDROID_KEYSTORE_B64: ${{ secrets.USERINFO_ANDROID_KEYSTORE_B64 }}
-          USERINFO_ANDROID_KEY_ALIAS: ${{ secrets.USERINFO_ANDROID_KEY_ALIAS }}
-          USERINFO_ANDROID_KEY_PASSWORD: ${{ secrets.USERINFO_ANDROID_KEY_PASSWORD }}
-          USERINFO_ANDROID_STORE_PASSWORD: ${{ secrets.USERINFO_ANDROID_STORE_PASSWORD }}
+          USERINFO_NEXT_ANDROID_KEYSTORE_B64: ${{ secrets.USERINFO_NEXT_ANDROID_KEYSTORE_B64 }}
+          USERINFO_NEXT_ANDROID_KEY_ALIAS: ${{ secrets.USERINFO_NEXT_ANDROID_KEY_ALIAS }}
+          USERINFO_NEXT_ANDROID_KEY_PASSWORD: ${{ secrets.USERINFO_NEXT_ANDROID_KEY_PASSWORD }}
+          USERINFO_NEXT_ANDROID_STORE_PASSWORD: ${{ secrets.USERINFO_NEXT_ANDROID_STORE_PASSWORD }}
         run: |
           set -euo pipefail
-          SIGNING_VALUES=("$USERINFO_ANDROID_KEYSTORE_B64" "$USERINFO_ANDROID_KEY_ALIAS" "$USERINFO_ANDROID_KEY_PASSWORD" "$USERINFO_ANDROID_STORE_PASSWORD")
+          SIGNING_VALUES=("$USERINFO_NEXT_ANDROID_KEYSTORE_B64" "$USERINFO_NEXT_ANDROID_KEY_ALIAS" "$USERINFO_NEXT_ANDROID_KEY_PASSWORD" "$USERINFO_NEXT_ANDROID_STORE_PASSWORD")
           PRESENT=0
           for value in "${SIGNING_VALUES[@]}"; do
             [[ -z "$value" ]] || PRESENT=$((PRESENT + 1))
@@ -104,7 +107,7 @@ jobs:
             # PR validation can use an ephemeral key, but never publish APKs
             # signed by the runner's disposable debug certificate.
             if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-              echo "::error::Release signing is NOT configured. Publishing would force users to uninstall and lose app data. Configure the four USERINFO_ANDROID_* Actions secrets per docs/ANDROID_SIGNING_AND_TRANSFER.md."
+              echo "::error::Release signing is NOT configured. Publishing would force users to uninstall and lose app data. Configure the four USERINFO_NEXT_ANDROID_* Actions secrets per docs/ANDROID_SIGNING_AND_TRANSFER.md."
               exit 1
             fi
             echo "mode=temporary-debug" >> "$GITHUB_OUTPUT"
@@ -112,10 +115,10 @@ jobs:
             exit 0
           fi
           if [[ "$PRESENT" != 4 ]]; then
-            echo "::error::Configure all four USERINFO_ANDROID_* secrets or none."
+            echo "::error::Configure all four USERINFO_NEXT_ANDROID_* secrets or none."
             exit 1
           fi
-          printf '%s' "$USERINFO_ANDROID_KEYSTORE_B64" | base64 --decode > android/app/userinfo-release.jks
+          printf '%s' "$USERINFO_NEXT_ANDROID_KEYSTORE_B64" | base64 --decode > android/app/userinfo-release.jks
           chmod 600 android/app/userinfo-release.jks
           python3 - <<'PY'
           from pathlib import Path
@@ -127,10 +130,10 @@ jobs:
           config = """
               signingConfigs {
                   create("release") {
-                      keyAlias = System.getenv("USERINFO_ANDROID_KEY_ALIAS")
-                      keyPassword = System.getenv("USERINFO_ANDROID_KEY_PASSWORD")
+                      keyAlias = System.getenv("USERINFO_NEXT_ANDROID_KEY_ALIAS")
+                      keyPassword = System.getenv("USERINFO_NEXT_ANDROID_KEY_PASSWORD")
                       storeFile = file("userinfo-release.jks")
-                      storePassword = System.getenv("USERINFO_ANDROID_STORE_PASSWORD")
+                      storePassword = System.getenv("USERINFO_NEXT_ANDROID_STORE_PASSWORD")
                   }
               }
           """
@@ -148,16 +151,16 @@ jobs:
         shell: bash
         run: |
           echo "::error::Release blocked: stable Android signing secrets are missing."
-          echo "::error::Set all four USERINFO_ANDROID_* GitHub Actions secrets according to docs/ANDROID_SIGNING_AND_TRANSFER.md."
+          echo "::error::Set all four USERINFO_NEXT_ANDROID_* GitHub Actions secrets according to docs/ANDROID_SIGNING_AND_TRANSFER.md."
           echo "::error::Do not uninstall the existing app unless a separate backup has been successfully restored and verified."
           exit 1
 
       - name: Build release APK
         shell: bash
         env:
-          USERINFO_ANDROID_KEY_ALIAS: ${{ secrets.USERINFO_ANDROID_KEY_ALIAS }}
-          USERINFO_ANDROID_KEY_PASSWORD: ${{ secrets.USERINFO_ANDROID_KEY_PASSWORD }}
-          USERINFO_ANDROID_STORE_PASSWORD: ${{ secrets.USERINFO_ANDROID_STORE_PASSWORD }}
+          USERINFO_NEXT_ANDROID_KEY_ALIAS: ${{ secrets.USERINFO_NEXT_ANDROID_KEY_ALIAS }}
+          USERINFO_NEXT_ANDROID_KEY_PASSWORD: ${{ secrets.USERINFO_NEXT_ANDROID_KEY_PASSWORD }}
+          USERINFO_NEXT_ANDROID_STORE_PASSWORD: ${{ secrets.USERINFO_NEXT_ANDROID_STORE_PASSWORD }}
         run: |
           flutter build apk --release \
             --build-name "${{ steps.version.outputs.version }}" \
@@ -175,24 +178,51 @@ jobs:
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -1)"
           test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          EXPECTED="$(tr -d '\r\n' < tool/next_signer_sha256.txt)"
+          ACTUAL="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          test "$ACTUAL" = "$EXPECTED" || { echo "::error::Next signing certificate mismatch"; exit 1; }
+
+      - name: Prepare offline signing bundle
+        if: github.event_name == 'pull_request' && steps.signing.outputs.mode == 'temporary-debug'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir offline-signing
+          cp build/app/outputs/flutter-apk/app-release.apk offline-signing/input.apk
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -1)"
+          cp "$(dirname "$APKSIGNER")/lib/apksigner.jar" offline-signing/apksigner.jar
+          cp tool/next_signer_sha256.txt offline-signing/
+          AAPT="$(dirname "$APKSIGNER")/aapt"
+          "$AAPT" dump badging offline-signing/input.apk > offline-signing/package-info.txt
+          grep -q "name='com.amindada021.userinfo.next'" offline-signing/package-info.txt
+          echo 'Build input only. Must be re-signed with permanent Next key before installation.' > offline-signing/README.txt
+
+      - name: Upload offline signing bundle
+        if: github.event_name == 'pull_request' && steps.signing.outputs.mode == 'temporary-debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Next-offline-signing-input
+          path: offline-signing/
+          retention-days: 7
 
       - name: Prepare versioned files and SHA256
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          cp build/app/outputs/flutter-apk/app-release.apk "UserInfo-v$VERSION.apk"
-          cp "UserInfo-v$VERSION.apk" "UserInfo-latest.apk"
-          sha256sum "UserInfo-v$VERSION.apk" > "UserInfo-v$VERSION.apk.sha256"
-          sha256sum "UserInfo-latest.apk" > "UserInfo-latest.apk.sha256"
+          cp build/app/outputs/flutter-apk/app-release.apk "UserInfo-Next-v$VERSION.apk"
+          cp "UserInfo-Next-v$VERSION.apk" "UserInfo-Next-latest.apk"
+          sha256sum "UserInfo-Next-v$VERSION.apk" > "UserInfo-Next-v$VERSION.apk.sha256"
+          sha256sum "UserInfo-Next-latest.apk" > "UserInfo-Next-latest.apk.sha256"
 
       - name: Upload build artifact
+        if: steps.signing.outputs.mode == 'persistent'
         uses: actions/upload-artifact@v4
         with:
-          name: UserInfo-v${{ steps.version.outputs.version }}
+          name: UserInfo-Next-v${{ steps.version.outputs.version }}
           path: |
-            UserInfo-v${{ steps.version.outputs.version }}.apk
-            UserInfo-v${{ steps.version.outputs.version }}.apk.sha256
+            UserInfo-Next-v${{ steps.version.outputs.version }}.apk
+            UserInfo-Next-v${{ steps.version.outputs.version }}.apk.sha256
           retention-days: 30
           if-no-files-found: error
 
@@ -210,10 +240,12 @@ jobs:
             exit 0
           fi
           cat > release-notes.md <<EOF
-          UserInfo $TAG — اپ اندروید آفلاین (نسخه آزمایشی).
+          UserInfo Next $TAG — اپ اندروید آفلاین (نسخه آزمایشی).
 
-          - دانلود برای گوشی: UserInfo-latest.apk
-          - دانلود آرشیوی نسخه: UserInfo-v$VERSION.apk
+          - نصب مستقل کنار نسخه ۱.۱۳ با شناسه com.amindada021.userinfo.next؛ نسخه قبلی را حذف نکنید.
+          - بکاپ SQLite نسخه ۱.۱۳ را از تنظیمات نسخه جدید ریستور کنید؛ فایل اصلی بکاپ تغییر نمی‌کند.
+          - دانلود برای گوشی: UserInfo-Next-latest.apk
+          - دانلود آرشیوی نسخه: UserInfo-Next-v$VERSION.apk
           - فایل‌های SHA256 برای اعتبارسنجی دانلود ارائه شده‌اند.
           - دیتابیس نسخه فعلی هنوز رمزگذاری‌شده نیست؛ **برای تست فقط از داده ساختگی استفاده کنید**.
           - حالت امضای APK: ${{ steps.signing.outputs.mode }}.
@@ -225,10 +257,11 @@ jobs:
           - گزارش و روش تست: https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/PERFORMANCE_2026-10-22.md
           EOF
           gh release create "$TAG" \
-            "UserInfo-v$VERSION.apk" "UserInfo-v$VERSION.apk.sha256" \
-            "UserInfo-latest.apk" "UserInfo-latest.apk.sha256" \
+            "UserInfo-Next-v$VERSION.apk" "UserInfo-Next-v$VERSION.apk.sha256" \
+            "UserInfo-Next-latest.apk" "UserInfo-Next-latest.apk.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "UserInfo $TAG" \
             --notes-file release-notes.md \
             --latest
+

@@ -55,9 +55,9 @@ void main() {
       final byName = await database.search(
           const SearchFilters(query: 'رضایی'));
       final byMobile = await database.search(
-          const SearchFilters(query: '0912', searchType: 'mobile'));
+          const SearchFilters(query: '0912000', searchType: 'mobile'));
       final byNational = await database.search(
-          const SearchFilters(query: '0000', searchType: 'national'));
+          const SearchFilters(query: '0000001', searchType: 'national'));
       expect(byName.length, 1);
       expect(byMobile.length, 1);
       expect(byNational.length, 1);
@@ -68,3 +68,4 @@ void main() {
     }
   }, timeout: const Timeout(Duration(minutes: 2)));
 }
+

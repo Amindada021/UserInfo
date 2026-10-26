@@ -26,6 +26,25 @@ void main() {
     }));
     return file;
   }
+  test('exact identifier equality uses covering index and stable pages', () async {
+    await seed();
+    const filters = SearchFilters(query: '+989120000000', searchType: 'mobile');
+    final first = await database.search(filters);
+    final next = await database.search(filters, beforeId: first.last['id'] as int);
+    expect(first.length, 20);
+    expect(next.length, 20);
+    expect({...first.map((r) => r['id']), ...next.map((r) => r['id'])}.length, 40);
+    final plan = await (await database.db).rawQuery(
+      'EXPLAIN QUERY PLAN SELECT r.* FROM record_identifiers ids '
+      'INDEXED BY idx_ident_mobile CROSS JOIN records r ON r.id=ids.record_id '
+      'WHERE ids.mobile=? AND ids.record_id<? ORDER BY ids.record_id DESC LIMIT 20',
+      ['09120000000', 41]);
+    final details = plan.map((r) => r['detail']).join(' ');
+    expect(details, contains('idx_ident_mobile'));
+    expect(details, isNot(contains('TEMP B-TREE')));
+    expect(details, isNot(contains('SCAN r')));
+  });
+
   test('fresh database keeps only indexes needed before manual indexing',
       () async {
     final handle = await database.db;
@@ -51,9 +70,9 @@ void main() {
     }
     expect(await database.count(const SearchFilters(query: 'حسی')), 40);
     expect(await database.count(const SearchFilters(
-        query: '0912', searchType: 'mobile')), 40);
+        query: '0912000', searchType: 'mobile')), 40);
     expect(await database.count(const SearchFilters(
-        query: '000', searchType: 'national')), 40);
+        query: '0000000', searchType: 'national')), 40);
   });
 
   test('prefix AND terms, original identifiers, keyset, edits and favorites', () async {
@@ -62,7 +81,7 @@ void main() {
       expect(await database.count(SearchFilters(query: q)), 40);
     }
     expect(await database.count(const SearchFilters(query: 'سینی')), 0);
-    expect(await database.count(const SearchFilters(query: '0912', searchType: 'mobile')), 40);
+    expect(await database.count(const SearchFilters(query: '0912000', searchType: 'mobile')), 40);
     final first = await database.search(const SearchFilters(), pageSize: 20);
     final second = await database.search(const SearchFilters(), beforeId: first.last['id'] as int);
     expect({...first.map((r) => r['id']), ...second.map((r) => r['id'])}.length, 40);
@@ -70,7 +89,7 @@ void main() {
     await database.toggleFavorite(id);
     await database.updatePerson(id, {'full_name': 'نام آزمایشی', 'mobile': '۰۹۳۵۰۰۰۰۰۰۰'});
     expect(await database.count(const SearchFilters(query: 'حسی')), 39);
-    expect(await database.count(const SearchFilters(query: '0935', searchType: 'mobile')), 1);
+    expect(await database.count(const SearchFilters(query: '0935000', searchType: 'mobile')), 1);
     expect(await database.count(const SearchFilters(favoritesOnly: true)), 1);
     expect((await database.byIds([id])).first['mobile'], '۰۹۳۵۰۰۰۰۰۰۰');
   });
@@ -87,7 +106,7 @@ void main() {
     expect((await database.nameIndexStatus()).done, 7);
     while (!(await database.buildNameIndexChunk(limit: 7)).ready) {}
     expect(await database.count(const SearchFilters(query: 'حسی')), 40);
-    expect(await database.count(const SearchFilters(query: '0912', searchType: 'mobile')), 40);
+    expect(await database.count(const SearchFilters(query: '0912000', searchType: 'mobile')), 40);
     expect((await (await database.db).rawQuery('PRAGMA integrity_check')).first.values.first, 'ok');
   });
   test('v7 migration drops only duplicate indexes, never imported people',
@@ -135,7 +154,7 @@ void main() {
     expect(await database.totalRecords(), 40);
     expect(await database.count(const SearchFilters(favoritesOnly: true)), 1);
     while (!(await database.buildNameIndexChunk(limit: 9)).ready) {}
-    expect(await database.count(const SearchFilters(query: '000', searchType: 'national')), 40);
+    expect(await database.count(const SearchFilters(query: '0000000', searchType: 'national')), 40);
   });
   test('failed batch rolls back checkpoint and preserves committed records', () async {
     final file = await database.beginFile(bank: 'آزمایشی', fingerprint: 'synthetic');
@@ -168,3 +187,4 @@ void main() {
   });
 
 }
+

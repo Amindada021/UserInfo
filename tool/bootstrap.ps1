@@ -16,6 +16,8 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 }
 python tool/generate_logo.py
 if ($LASTEXITCODE -ne 0) { throw 'Logo generation failed' }
+python tool/configure_parallel_android.py
+if ($LASTEXITCODE -ne 0) { throw 'Parallel application identity setup failed' }
 $fontFolder = Join-Path $PWD 'assets/fonts'
 New-Item -ItemType Directory -Force -Path $fontFolder | Out-Null
 Invoke-WebRequest 'https://raw.githubusercontent.com/google/fonts/main/ofl/lateef/Lateef-Regular.ttf' -OutFile (Join-Path $fontFolder 'Lateef-Regular.ttf')
@@ -29,3 +31,4 @@ if ($LASTEXITCODE -ne 0) { throw 'flutter test failed' }
 flutter build apk --debug
 if ($LASTEXITCODE -ne 0) { throw 'Flutter APK build failed' }
 Write-Host 'APK: build/app/outputs/flutter-apk/app-debug.apk' -ForegroundColor Green
+
