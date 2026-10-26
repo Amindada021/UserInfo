@@ -182,6 +182,29 @@ jobs:
           ACTUAL="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
           test "$ACTUAL" = "$EXPECTED" || { echo "::error::Next signing certificate mismatch"; exit 1; }
 
+      - name: Prepare offline signing bundle
+        if: github.event_name == 'pull_request' && steps.signing.outputs.mode == 'temporary-debug'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir offline-signing
+          cp build/app/outputs/flutter-apk/app-release.apk offline-signing/input.apk
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -1)"
+          cp "$(dirname "$APKSIGNER")/lib/apksigner.jar" offline-signing/apksigner.jar
+          cp tool/next_signer_sha256.txt offline-signing/
+          AAPT="$(dirname "$APKSIGNER")/aapt"
+          "$AAPT" dump badging offline-signing/input.apk > offline-signing/package-info.txt
+          grep -q "name='com.amindada021.userinfo.next'" offline-signing/package-info.txt
+          echo 'Build input only. Must be re-signed with permanent Next key before installation.' > offline-signing/README.txt
+
+      - name: Upload offline signing bundle
+        if: github.event_name == 'pull_request' && steps.signing.outputs.mode == 'temporary-debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Next-offline-signing-input
+          path: offline-signing/
+          retention-days: 7
+
       - name: Prepare versioned files and SHA256
         shell: bash
         run: |
